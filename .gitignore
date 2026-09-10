@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Secrets - NEVER commit
+.env
+*.key
+*.pem
+
+# Local runtime data (regenerable, may contain balances/positions)
+agent/data/*.json
+agent/data/*.db
+agent/data/*.bak
+!agent/data/.gitkeep
+agent/logs/*.log
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temp installer scripts live outside the repo; nothing else ignored.

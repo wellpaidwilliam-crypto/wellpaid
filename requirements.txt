@@ -1,0 +1,6 @@
+# WellPaiD Trader - runtime dependencies.
+# V1 is stdlib-only (no third-party imports in agent/ or tests/).
+# This file exists so installs are explicit and future deps get pinned.
+# Python >= 3.10 required (uses X | Y free-form dataclass syntax).
+
+# No third-party runtime dependencies yet.
