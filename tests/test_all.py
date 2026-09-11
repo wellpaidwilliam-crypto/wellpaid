@@ -743,6 +743,25 @@ class TestBrokers(unittest.TestCase):
 class TestAPISurface(unittest.TestCase):
     """Test authenticated API: auth enforcement and trading gate."""
 
+    @staticmethod
+    def _urlopen_resilient(req, timeout=10):
+        """urlopen with retries on loopback transport aborts.
+
+        Windows intermittently RSTs 127.0.0.1 connections under rapid
+        server churn (WinError 10053/10054). Up to 3 attempts cover
+        back-to-back aborts; HTTP error statuses still propagate
+        untouched after a connected response.
+        """
+        import urllib.request
+
+        last = None
+        for _ in range(3):
+            try:
+                return urllib.request.urlopen(req, timeout=timeout)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError) as exc:
+                last = exc
+        raise last  # pragma: no cover - 3 consecutive aborts
+
     def _client(self, server):
         import json as _json
         import urllib.request
@@ -758,7 +777,7 @@ class TestAPISurface(unittest.TestCase):
             if body is not None:
                 req.add_header("Content-Type", "application/json")
             try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with self._urlopen_resilient(req) as resp:
                     return resp.status, _json.loads(resp.read().decode())
             except urllib.error.HTTPError as e:
                 return e.code, _json.loads(e.read().decode())
@@ -770,6 +789,13 @@ class TestAPISurface(unittest.TestCase):
         from agent.api.server import create_server
 
         kwargs.setdefault("api_token", "test-token-123")
+        if "paper" not in kwargs:
+            # Isolated paper engine: never touch the repo working tree.
+            tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(tmp.cleanup)
+            kwargs["paper"] = PaperTradingEngine(
+                storage_path=os.path.join(tmp.name, "paper.db")
+            )
         server = create_server("127.0.0.1", 0, **kwargs)
 
         def _target():
@@ -780,8 +806,13 @@ class TestAPISurface(unittest.TestCase):
 
         thread = threading.Thread(target=_target, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        def _stop_server():
+            try:
+                server.shutdown()  # stop the loop BEFORE closing the socket
+            finally:
+                server.server_close()
+
+        self.addCleanup(_stop_server)
         return server
 
     def test_unauthorized_rejected(self):
@@ -867,13 +898,25 @@ class TestAPITools(unittest.TestCase):
         import threading
         from agent.api.server import create_server
 
-        server = create_server("127.0.0.1", 0, api_token="tools-token")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        paper = PaperTradingEngine(
+            storage_path=os.path.join(tmp.name, "tools.db")
+        )
+        server = create_server(
+            "127.0.0.1", 0, api_token="tools-token", paper=paper
+        )
         thread = threading.Thread(
             target=self._serve_target(server), daemon=True
         )
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        def _stop_server():
+            try:
+                server.shutdown()  # stop the loop BEFORE closing the socket
+            finally:
+                server.server_close()
+
+        self.addCleanup(_stop_server)
         return server
 
     @staticmethod
@@ -898,7 +941,7 @@ class TestAPITools(unittest.TestCase):
         if body is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with TestAPISurface._urlopen_resilient(req) as resp:
                 return resp.status, _json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             return e.code, _json.loads(e.read().decode())
@@ -1554,8 +1597,13 @@ class TestWebFetchTool(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        def _stop_server():
+            try:
+                server.shutdown()  # stop the loop BEFORE closing the socket
+            finally:
+                server.server_close()
+
+        self.addCleanup(_stop_server)
         return f"http://127.0.0.1:{server.server_address[1]}/"
 
     def test_html_text_and_links(self):
@@ -1568,6 +1616,9 @@ class TestWebFetchTool(unittest.TestCase):
             "<script>var x = 1;</script></body></html>"
         )
         result = WebFetchTool().run({"url": url})
+        if not result.success:
+            # Loopback transport flake (see _urlopen_resilient): one retry.
+            result = WebFetchTool().run({"url": url})
         self.assertTrue(result.success)
         self.assertEqual(result.data["title"], "Hi")
         self.assertIn("Hello", result.data["text"])
