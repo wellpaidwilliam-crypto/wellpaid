@@ -132,6 +132,11 @@ All logs pass through a sensitive data filter that redacts:
 - **Paper tool**: submits refused unless paper mode is enabled;
   proposals and submits both pass `RiskEngine`; rejections carry
   structured explanations (`risk.decision/reason/violations`).
+- **File tools**: confined to one root; absolute paths, `..` escapes
+  and sensitive filenames (`.env`, keys, tokens, credentials) refused;
+  reads capped (100 KiB), oversized drawings/workbooks refused outright.
+- **Web tool**: http(s) GET only; link-local/metadata addresses refused;
+  2 MiB cap; no JavaScript, no forms, no cookies, no auth.
 - **API tools endpoint**: same Bearer auth as all endpoints; unknown
   tools return 422, never execution.
 

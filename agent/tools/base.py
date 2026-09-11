@@ -26,6 +26,7 @@ class SafetyClass(str, Enum):
     EXEC capability: arbitrary shell/Python/OS execution is forbidden."""
 
     READ_ONLY = "read_only"  # no state mutation anywhere
+    LOCAL_READ = "local_read"  # reads local user data, no mutation, no network
     LOCAL_WRITE = "local_write"  # local SQLite personal state only
     PAPER_TRADE = "paper_trade"  # simulated money, always risk-gated
 

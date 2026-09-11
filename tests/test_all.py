@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.4.0")
+        self.assertEqual(agent.version, "0.5.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -1076,6 +1076,14 @@ class TestToolRegistry(unittest.TestCase):
         self.assertNotIn("memory", names)
         self.assertNotIn("tasks", names)
 
+    def test_default_registry_includes_personal_tools(self):
+        from agent.tools.registry import build_default_registry
+
+        registry = build_default_registry()
+        names = {t["name"] for t in registry.list()}
+        for expected in ("files", "sheets", "pdf", "dxf", "webfetch"):
+            self.assertIn(expected, names)
+
 
 class TestMemoryTaskTools(unittest.TestCase):
     """Test memory/task tools over existing SQLite stores."""
@@ -1324,6 +1332,264 @@ class TestRiskExplanation(unittest.TestCase):
             )
         )
         self.assertIn("APPROVED", format_rejection(check))
+
+
+class TestFilesTool(unittest.TestCase):
+    """Test sandboxed file inspection."""
+
+    def _root(self, tmpdir):
+        from agent.tools.documents import FilesTool
+
+        root = os.path.join(tmpdir, "root")
+        os.mkdir(root)
+        with open(os.path.join(root, "notes.txt"), "w", encoding="utf-8") as f:
+            f.write("hello world")
+        with open(os.path.join(root, ".env"), "w", encoding="utf-8") as f:
+            f.write("SECRET=1")
+        return FilesTool(root=root)
+
+    def test_list_read_stat_hash(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._root(tmpdir)
+            listed = tool.run({"action": "list"})
+            self.assertTrue(listed.success)
+            names = {e["name"] for e in listed.data["entries"]}
+            self.assertIn("notes.txt", names)
+            read = tool.run({"action": "read", "path": "notes.txt"})
+            self.assertTrue(read.success)
+            self.assertIn("hello", read.data["text"])
+            hashed = tool.run({"action": "hash", "path": "notes.txt"})
+            self.assertEqual(
+                hashed.data["sha256"],
+                hashlib.sha256(b"hello world").hexdigest(),
+            )
+            stat = tool.run({"action": "stat", "path": "notes.txt"})
+            self.assertEqual(stat.data["size"], 11)
+
+    def test_escape_and_sensitive_refused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._root(tmpdir)
+            for bad in ("../x", "/etc/hosts", ".env", "a/../../b", "x/token.key"):
+                result = tool.run({"action": "read", "path": bad})
+                self.assertFalse(result.success, bad)
+
+    def test_binary_and_large_refused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._root(tmpdir)
+            root = os.path.join(tmpdir, "root")
+            with open(os.path.join(root, "blob.bin"), "wb") as f:
+                f.write(bytes(range(256)))
+            result = tool.run({"action": "read", "path": "blob.bin"})
+            self.assertFalse(result.success)
+
+
+def _write_minimal_xlsx(path):
+    """Build a tiny .xlsx with stdlib zip (shared strings + 2 rows)."""
+    import zipfile
+
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(
+            "xl/workbook.xml",
+            '<workbook xmlns="%s"><sheets>'
+            '<sheet name="Trades" r:id="rId1" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
+            "</sheets></workbook>" % ns,
+        )
+        z.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+            "</Relationships>",
+        )
+        z.writestr(
+            "xl/sharedStrings.xml",
+            '<sst xmlns="%s"><si><t>AAPL</t></si></sst>' % ns,
+        )
+        z.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<worksheet xmlns="%s"><sheetData>'
+            '<row><c t="s"><v>0</v></c><c><v>150.5</v></c></row>'
+            '<row><c t="s"><v>0</v></c><c><v>200</v></c></row>'
+            "</sheetData></worksheet>" % ns,
+        )
+
+
+class TestSheetsTool(unittest.TestCase):
+    """Test stdlib xlsx inspection."""
+
+    def test_sheets_preview_stats(self):
+        from agent.tools.documents import SheetsTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "book.xlsx")
+            _write_minimal_xlsx(path)
+            tool = SheetsTool(root=tmpdir)
+            names = tool.run({"action": "sheets", "path": "book.xlsx"})
+            self.assertTrue(names.success)
+            self.assertEqual(names.data["sheets"], ["Trades"])
+            preview = tool.run({"action": "preview", "path": "book.xlsx"})
+            self.assertTrue(preview.success)
+            self.assertEqual(
+                preview.data["preview"], [["AAPL", 150.5], ["AAPL", 200]]
+            )
+            stats = tool.run({"action": "stats", "path": "book.xlsx"})
+            self.assertTrue(stats.success)
+            col1 = [c for c in stats.data["columns"] if c["column"] == 1][0]
+            self.assertAlmostEqual(col1["mean"], 175.25)
+
+    def test_rejects_non_workbook(self):
+        from agent.tools.documents import SheetsTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad = os.path.join(tmpdir, "nope.txt")
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("nope")
+            tool = SheetsTool(root=tmpdir)
+            self.assertFalse(
+                tool.run({"action": "sheets", "path": "nope.txt"}).success
+            )
+            self.assertFalse(
+                tool.run({"action": "sheets", "path": "missing.xlsx"}).success
+            )
+
+
+class TestPdfTool(unittest.TestCase):
+    """Test PDF tool gating (backend-agnostic assertions)."""
+
+    def test_refuses_non_pdf(self):
+        from agent.tools.documents import PdfTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            doc = os.path.join(tmpdir, "a.txt")
+            with open(doc, "w", encoding="utf-8") as f:
+                f.write("x")
+            result = PdfTool(root=tmpdir).run(
+                {"action": "info", "path": "a.txt"}
+            )
+            self.assertFalse(result.success)
+
+    def test_info_either_reads_or_hints(self):
+        from agent.tools.documents import PdfTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            doc = os.path.join(tmpdir, "a.pdf")
+            with open(doc, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+            result = PdfTool(root=tmpdir).run(
+                {"action": "info", "path": "a.pdf"}
+            )
+            if result.success:
+                self.assertIn("pages", result.data)
+            else:
+                self.assertIn("pypdf", result.message)
+
+
+_MINIMAL_DXF = (
+    "0\nSECTION\n2\nHEADER\n9\n$EXTMIN\n10\n0.0\n20\n0.0\n"
+    "9\n$EXTMAX\n10\n100.0\n20\n50.0\n0\nENDSEC\n"
+    "0\nSECTION\n2\nTABLES\n0\nLAYER\n2\nWalls\n0\nLAYER\n2\nDoors\n0\nENDSEC\n"
+    "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nWalls\n0\nCIRCLE\n8\nDoors\n"
+    "0\nLINE\n8\nWalls\n0\nENDSEC\n0\nEOF\n"
+)
+
+
+class TestDxfTool(unittest.TestCase):
+    """Test read-only DXF inventory."""
+
+    def test_inventory(self):
+        from agent.tools.documents import DxfTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "plan.dxf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_MINIMAL_DXF)
+            result = DxfTool(root=tmpdir).run(
+                {"action": "inventory", "path": "plan.dxf"}
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["entities_total"], 3)
+            self.assertEqual(
+                result.data["entities_by_type"], {"LINE": 2, "CIRCLE": 1}
+            )
+            self.assertEqual(result.data["layers"], ["Doors", "Walls"])
+            self.assertEqual(
+                result.data["extents"]["min"], {"x": "0.0", "y": "0.0"}
+            )
+            self.assertEqual(
+                result.data["extents"]["max"], {"x": "100.0", "y": "50.0"}
+            )
+
+    def test_refuses_non_dxf(self):
+        from agent.tools.documents import DxfTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = DxfTool(root=tmpdir).run(
+                {"action": "inventory", "path": "missing.dxf"}
+            )
+            self.assertFalse(result.success)
+
+
+class TestWebFetchTool(unittest.TestCase):
+    """Test guarded web fetch against a local HTTP server."""
+
+    def _serve(self, body, content_type="text/html"):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                payload = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return f"http://127.0.0.1:{server.server_address[1]}/"
+
+    def test_html_text_and_links(self):
+        from agent.tools.web import WebFetchTool
+
+        url = self._serve(
+            "<html><head><title>Hi</title></head><body>"
+            "<p>Hello <b>world</b></p>"
+            '<a href="/next">go</a>'
+            "<script>var x = 1;</script></body></html>"
+        )
+        result = WebFetchTool().run({"url": url})
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["title"], "Hi")
+        self.assertIn("Hello", result.data["text"])
+        self.assertNotIn("var x", result.data["text"])
+        self.assertEqual(len(result.data["links"]), 1)
+        self.assertTrue(result.data["links"][0]["href"].startswith("http://127.0.0.1"))
+
+    def test_refuses_bad_schemes_and_metadata(self):
+        from agent.tools.web import WebFetchTool
+
+        tool = WebFetchTool()
+        self.assertFalse(tool.run({"url": "file:///etc/passwd"}).success)
+        self.assertFalse(tool.run({"url": "ftp://x/y"}).success)
+        refused = tool.run({"url": "http://169.254.169.254/latest"})
+        self.assertFalse(refused.success)
+        self.assertIn("refused", refused.message)
+
+    def test_unreachable_fails_softly(self):
+        from agent.tools.web import WebFetchTool
+
+        result = WebFetchTool().run({"url": "http://127.0.0.1:1/"})
+        self.assertFalse(result.success)
 
 
 class TestAgentCLI(unittest.TestCase):

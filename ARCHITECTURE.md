@@ -57,6 +57,11 @@ Command Router  ──→  ToolRegistry
 - **catalog.py** - calculator (safe AST), system_status, memory
   (credential refusal), tasks, market_data (read-only), backtest
   (honesty-labeled), paper_account (risk-gated, PAPER-labeled)
+- **documents.py** - files (sandboxed root, sensitive-name refusal),
+  sheets (.xlsx via stdlib zip, formulas never evaluated), pdf
+  (optional pypdf/pdfplumber, graceful install hint), dxf (read-only
+  inventory: entity counts, layers, extents)
+- **web.py** - webfetch (GET-only, 2 MiB cap, no JS, metadata-IP refusal)
 
 ### Observability
 

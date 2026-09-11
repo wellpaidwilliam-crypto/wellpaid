@@ -85,12 +85,14 @@ def build_default_registry(
     risk: Any = None,
     memory: Any = None,
     tasks: Any = None,
+    files_root: Any = None,
 ) -> ToolRegistry:
     """Assemble the standard personal-agent toolset.
 
     Missing backends are skipped (tool simply absent), except paper:
     the paper tool is always present because the paper engine constructs
     cheaply — but it refuses to submit unless configuration enables it.
+    Document tools share one sandbox root (default: current directory).
     """
     try:
         from agent.tools.catalog import (
@@ -112,6 +114,14 @@ def build_default_registry(
             SystemStatusTool,
             TaskManagerTool,
         )
+    try:
+        from agent.tools.documents import DxfTool, FilesTool, PdfTool, SheetsTool
+    except ImportError:
+        from .documents import DxfTool, FilesTool, PdfTool, SheetsTool
+    try:
+        from agent.tools.web import WebFetchTool
+    except ImportError:
+        from .web import WebFetchTool
     registry = ToolRegistry()
     registry.register(CalculatorTool())
     registry.register(SystemStatusTool(config))
@@ -122,4 +132,9 @@ def build_default_registry(
     registry.register(MarketDataTool())
     registry.register(BacktestTool())
     registry.register(PaperAccountTool(config, paper, risk))
+    registry.register(FilesTool(files_root))
+    registry.register(SheetsTool(files_root))
+    registry.register(PdfTool(files_root))
+    registry.register(DxfTool(files_root))
+    registry.register(WebFetchTool())
     return registry

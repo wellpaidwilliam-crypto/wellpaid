@@ -30,6 +30,15 @@
 
 Stdlib-only dependency policy upheld: no third-party packages added.
 
+### V0.5 - Personal-Agent Depth, Batch A (Current)
+
+- ✅ files tool (root sandbox, traversal + sensitive-name refusal)
+- ✅ sheets tool (.xlsx via stdlib zipfile; stats/preview; no formula eval)
+- ✅ pdf tool (optional pypdf/pdfplumber; graceful hint, stays optional)
+- ✅ dxf tool (read-only inventory: entities, layers, extents; 50 MiB cap)
+- ✅ webfetch tool (GET-only, 2 MiB cap, no JS, link-local refused)
+- ✅ 107 automated tests (94 V0.4 preserved + 13 new)
+
 ### V2 - Enhanced Research
 
 - [ ] Real market data integration

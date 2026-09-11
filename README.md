@@ -98,6 +98,9 @@ WellPaiD> run calculator expression="(150.5*10)+25"
 WellPaiD> remember that I prefer crypto research
 WellPaiD> remind me to review my CAD portfolio
 WellPaiD> price of AAPL
+WellPaiD> run dxf action=inventory path=plan.dxf
+WellPaiD> run sheets action=stats path=backtest.xlsx
+WellPaiD> run webfetch url=https://example.com
 ```
 
 **LIVE TRADING DOES NOT EXIST.** Research, backtests and paper trades
