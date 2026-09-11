@@ -15,6 +15,21 @@
 - ✅ Paper trading engine
 - ✅ Comprehensive tests
 
+### V0.4 - Personal AI Agent Foundation (Current)
+
+- ✅ Tool abstraction (`Tool`, `ToolResult`, `SafetyClass` — no exec tools)
+- ✅ ToolRegistry (register/get/list/safe execute, redacted logging)
+- ✅ Memory/task tools over existing SQLite stores (+ credential refusal)
+- ✅ Read-only market-data tool (Stooq/Coinbase, graceful offline)
+- ✅ Research backtest tool (mandatory HISTORICAL ≠ prediction labeling)
+- ✅ Paper-account tool (propose/submit via risk veto, PAPER-labeled)
+- ✅ Structured risk explanations (`format_rejection`, veto untouched)
+- ✅ API `/tools` + `/tools/execute` (same Bearer auth, paper still gated)
+- ✅ CLI `tools`/`run` + `remember`/`remind me`/`price` shortcuts
+- ✅ 94 automated tests (57 V0.3 preserved + 37 new)
+
+Stdlib-only dependency policy upheld: no third-party packages added.
+
 ### V2 - Enhanced Research
 
 - [ ] Real market data integration

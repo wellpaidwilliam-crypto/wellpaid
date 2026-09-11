@@ -33,18 +33,36 @@ WellPaiD Trader is a modular personal AI agent designed for trading research, st
 ## Data Flow
 
 ```
-User Input
+User Input (CLI) / HTTP (API)
     ↓
-Core Agent
+WellPaiDAgent (+ natural shortcuts: remember/remind/price)
     ↓
-Command Router
-    ↓
-Module Handlers
-    ↓
-Risk Engine (for trading)
-    ↓
-Execution (paper/live)
+Command Router  ──→  ToolRegistry
+                         ↓
+              Tool (validated schema, contained errors)
+                    ↓
+         Backend (memory/tasks/market/research/paper)
+                    ↓
+              Risk Engine (for paper proposals/submits)
+                    ↓
+         ToolResult {success, message, tool, data, warnings, risk}
 ```
+
+### V0.4 Agent Layer (`agent/tools/`)
+
+- **base.py** - `Tool` ABC, `ToolResult`, `SafetyClass`
+  (read_only / local_write / paper_trade — no exec capability exists)
+- **registry.py** - `ToolRegistry` (register/get/list/execute) +
+  `build_default_registry()` wiring existing backends
+- **catalog.py** - calculator (safe AST), system_status, memory
+  (credential refusal), tasks, market_data (read-only), backtest
+  (honesty-labeled), paper_account (risk-gated, PAPER-labeled)
+
+### Observability
+
+Trace per action: REQUEST → ROUTER → TOOL → DATA → DECISION → RISK
+→ RESULT. Tool start/finish logged by name and success only — never
+arguments (may carry user data) and never raw results.
 
 ## Safety Architecture
 

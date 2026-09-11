@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.3.0")
+        self.assertEqual(agent.version, "0.4.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -858,6 +858,565 @@ class TestAPISurface(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ["WELLPAID_API_TOKEN"] = old
+
+
+class TestAPITools(unittest.TestCase):
+    """Test tools endpoints: auth, discovery, gated execution."""
+
+    def _setup(self):
+        import threading
+        from agent.api.server import create_server
+
+        server = create_server("127.0.0.1", 0, api_token="tools-token")
+        thread = threading.Thread(
+            target=self._serve_target(server), daemon=True
+        )
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return server
+
+    @staticmethod
+    def _serve_target(server):
+        def _target():
+            try:
+                server.serve_forever()
+            except OSError:
+                pass  # shutdown/close race on Windows teardown
+
+        return _target
+
+    def _call(self, server, method, path, body=None):
+        import json as _json
+        import urllib.request
+        import urllib.error
+
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        data = _json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(base + path, data=data, method=method)
+        req.add_header("Authorization", "Bearer tools-token")
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, _json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, _json.loads(e.read().decode())
+
+    def test_tools_list_requires_auth(self):
+        import urllib.request
+        import urllib.error
+
+        server = self._setup()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(base + "/tools", timeout=10)
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_tools_list(self):
+        server = self._setup()
+        status, body = self._call(server, "GET", "/tools")
+        self.assertEqual(status, 200)
+        names = {t["name"] for t in body["tools"]}
+        self.assertIn("calculator", names)
+        self.assertIn("paper_account", names)
+
+    def test_tool_execute_calculator(self):
+        server = self._setup()
+        status, body = self._call(
+            server, "POST", "/tools/execute",
+            {"name": "calculator", "args": {"expression": "6*7"}},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(body["data"]["result"], 42)
+
+    def test_tool_execute_unknown(self):
+        server = self._setup()
+        status, body = self._call(
+            server, "POST", "/tools/execute",
+            {"name": "shell", "args": {}},
+        )
+        self.assertEqual(status, 422)
+        self.assertFalse(body["success"])
+
+    def test_tool_execute_paper_still_gated(self):
+        server = self._setup()
+        status, body = self._call(
+            server, "POST", "/tools/execute",
+            {"name": "paper_account",
+             "args": {"action": "submit", "symbol": "AAPL",
+                      "side": "buy", "quantity": 1,
+                      "current_price": 100.0}},
+        )
+        self.assertEqual(status, 422)
+        self.assertFalse(body["success"])  # paper mode disabled by default
+
+
+class TestToolAbstraction(unittest.TestCase):
+    """Test Tool base: validation, containment, result contract."""
+
+    def test_schema_rejects_unknown_fields(self):
+        from agent.tools.catalog import CalculatorTool
+
+        result = CalculatorTool().run(
+            {"expression": "1+1", "smuggled": "rm -rf"}
+        )
+        self.assertFalse(result.success)
+        self.assertIn("unknown field", result.message)
+
+    def test_schema_rejects_missing_required(self):
+        from agent.tools.catalog import CalculatorTool
+
+        result = CalculatorTool().run({})
+        self.assertFalse(result.success)
+
+    def test_schema_rejects_wrong_type(self):
+        from agent.tools.catalog import CalculatorTool
+
+        result = CalculatorTool().run({"expression": 42})
+        self.assertFalse(result.success)
+
+    def test_result_contract(self):
+        from agent.tools.catalog import CalculatorTool
+
+        result = CalculatorTool().run({"expression": "2*3"})
+        as_dict = result.to_dict()
+        for key in ("success", "message", "tool", "data", "warnings", "risk"):
+            self.assertIn(key, as_dict)
+        self.assertEqual(as_dict["tool"], "calculator")
+
+    def test_calculator_blocks_code(self):
+        from agent.tools.catalog import CalculatorTool
+
+        for evil in ("__import__('os')", "open('x')", "a+b", "[1,2][0]"):
+            result = CalculatorTool().run({"expression": evil})
+            self.assertFalse(result.success, evil)
+
+    def test_calculator_blocks_bombs(self):
+        from agent.tools.catalog import CalculatorTool
+
+        self.assertFalse(
+            CalculatorTool().run({"expression": "10**1001"}).success
+        )
+        self.assertFalse(
+            CalculatorTool().run({"expression": "1/0"}).success
+        )
+
+
+class TestToolRegistry(unittest.TestCase):
+    """Test registry: duplicates, unknown tools, error containment."""
+
+    def _registry(self):
+        from agent.tools.registry import ToolRegistry
+        from agent.tools.catalog import CalculatorTool
+
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        return registry
+
+    def test_duplicate_registration_rejected(self):
+        from agent.tools.catalog import CalculatorTool
+
+        registry = self._registry()
+        with self.assertRaises(ValueError):
+            registry.register(CalculatorTool())
+
+    def test_rejects_non_tools(self):
+        registry = self._registry()
+        with self.assertRaises(ValueError):
+            registry.register(object())
+
+    def test_unknown_tool_fails_safely(self):
+        registry = self._registry()
+        result = registry.execute("does_not_exist", {})
+        self.assertFalse(result.success)
+        self.assertIn("unknown tool", result.message)
+
+    def test_tool_exception_contained(self):
+        from agent.tools.base import Tool, ToolResult
+        from agent.tools.registry import ToolRegistry
+
+        class Broken(Tool):
+            name = "broken"
+            description = "always raises"
+            schema = {}
+
+            def execute(self, args):
+                raise RuntimeError("boom")
+
+        registry = ToolRegistry()
+        registry.register(Broken())
+        result = registry.execute("broken", {})
+        self.assertFalse(result.success)
+
+    def test_list_describes_tools(self):
+        registry = self._registry()
+        listed = registry.list()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "calculator")
+        self.assertIn("safety", listed[0])
+
+    def test_default_registry_tools(self):
+        from agent.tools.registry import build_default_registry
+
+        registry = build_default_registry()
+        names = {t["name"] for t in registry.list()}
+        for expected in (
+            "calculator", "system_status", "market_data",
+            "backtest", "paper_account",
+        ):
+            self.assertIn(expected, names)
+
+    def test_default_registry_skips_missing_backends(self):
+        from agent.tools.registry import build_default_registry
+
+        registry = build_default_registry()
+        names = {t["name"] for t in registry.list()}
+        self.assertNotIn("memory", names)
+        self.assertNotIn("tasks", names)
+
+
+class TestMemoryTaskTools(unittest.TestCase):
+    """Test memory/task tools over existing SQLite stores."""
+
+    def test_memory_remember_search(self):
+        from agent.tools.catalog import MemoryTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                storage_path=os.path.join(tmpdir, "m.db")
+            )
+            tool = MemoryTool(store)
+            saved = tool.run(
+                {"action": "remember", "content": "I prefer crypto research"}
+            )
+            self.assertTrue(saved.success)
+            found = tool.run({"action": "search", "query": "crypto"})
+            self.assertTrue(found.success)
+            self.assertEqual(len(found.data["matches"]), 1)
+
+    def test_memory_refuses_secrets(self):
+        from agent.tools.catalog import MemoryTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                storage_path=os.path.join(tmpdir, "m.db")
+            )
+            tool = MemoryTool(store)
+            refused = tool.run(
+                {"action": "remember",
+                 "content": "my api_key is SECRET123"}
+            )
+            self.assertFalse(refused.success)
+            self.assertIn("credential", refused.message)
+            self.assertEqual(store.count(), 0)
+
+    def test_tasks_create_complete(self):
+        from agent.tools.catalog import TaskManagerTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(
+                storage_path=os.path.join(tmpdir, "t.db")
+            )
+            tool = TaskManagerTool(manager)
+            created = tool.run({"action": "create", "title": "Review CAD data"})
+            self.assertTrue(created.success)
+            listed = tool.run({"action": "list"})
+            self.assertEqual(len(listed.data["tasks"]), 1)
+            done = tool.run(
+                {"action": "complete",
+                 "task_id": created.data["id"]}
+            )
+            self.assertTrue(done.success)
+
+
+class TestMarketBacktestTools(unittest.TestCase):
+    """Test read-only research tools (mocked network)."""
+
+    def test_market_price_mocked(self):
+        import agent.trading.brokers as brokers
+        from agent.tools.catalog import MarketDataTool
+
+        original = brokers._http_get_text
+        brokers._http_get_text = (
+            lambda url, timeout=15: "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
+            "AAPL,01/02/2024,22:00,100,101,99,100.5,1000\n"
+        )
+        try:
+            result = MarketDataTool().run(
+                {"action": "price", "symbol": "AAPL"}
+            )
+        finally:
+            brokers._http_get_text = original
+        self.assertTrue(result.success)
+        self.assertAlmostEqual(result.data["price"], 100.5)
+
+    def test_market_history_mocked(self):
+        import agent.trading.brokers as brokers
+        from agent.tools.catalog import MarketDataTool
+
+        body = (
+            "Date,Open,High,Low,Close,Volume\n"
+            + "".join(
+                f"2024-01-{d:02d},100,101,99,100.5,1000\n"
+                for d in range(1, 11)
+            )
+        )
+        original = brokers._http_get_text
+        brokers._http_get_text = lambda url, timeout=15: body
+        try:
+            result = MarketDataTool().run(
+                {"action": "history", "symbol": "AAPL", "days": 10}
+            )
+        finally:
+            brokers._http_get_text = original
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["bars"], 10)
+
+    def test_market_offline_graceful(self):
+        import agent.trading.brokers as brokers
+        from agent.tools.catalog import MarketDataTool
+
+        def boom(url, timeout=15):
+            raise TimeoutError("offline")
+
+        original = brokers._http_get_text
+        brokers._http_get_text = boom
+        try:
+            result = MarketDataTool().run(
+                {"action": "price", "symbol": "AAPL"}
+            )
+        finally:
+            brokers._http_get_text = original
+        self.assertFalse(result.success)
+
+    def test_backtest_mock_labels_honesty(self):
+        from agent.tools.catalog import BacktestTool
+
+        result = BacktestTool().run(
+            {"symbol": "AAPL", "days": 120, "source": "mock"}
+        )
+        self.assertTrue(result.success)
+        self.assertIn("HISTORICAL", result.message)
+        self.assertTrue(
+            any("HISTORICAL" in w for w in result.warnings)
+        )
+        self.assertIn("assumptions", result.data)
+        self.assertIn("total_return", result.data)
+
+
+class TestPaperTool(unittest.TestCase):
+    """Test paper tool: veto path, gating, bypass impossibility."""
+
+    def _stack(self, tmpdir, **env):
+        import os as _os
+
+        old = {k: _os.environ.get(k) for k in env}
+        for k, v in env.items():
+            _os.environ[k] = v
+
+        def _restore():
+            for k, v in old.items():
+                if v is None:
+                    _os.environ.pop(k, None)
+                else:
+                    _os.environ[k] = v
+            reset_config()
+
+        self.addCleanup(_restore)
+        reset_config()
+        from agent.core.config import Config
+        from agent.tools.catalog import PaperAccountTool
+
+        risk = RiskEngine()
+        paper = PaperTradingEngine(
+            initial_balance=10000.0,
+            storage_path=os.path.join(tmpdir, "p.db"),
+            risk_engine=risk,
+        )
+        return PaperAccountTool(Config(), paper, risk)
+
+    def test_submit_blocked_when_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._stack(tmpdir)
+            result = tool.run(
+                {"action": "submit", "symbol": "AAPL",
+                 "side": "buy", "quantity": 1,
+                 "current_price": 100.0}
+            )
+            self.assertFalse(result.success)
+            self.assertIn("disabled", result.message)
+
+    def test_propose_rejected_explains_why(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._stack(tmpdir)
+            result = tool.run(
+                {"action": "propose", "symbol": "AAPL",
+                 "side": "buy", "quantity": 200,
+                 "current_price": 1000.0}
+            )
+            self.assertFalse(result.success)
+            self.assertEqual(result.risk["decision"], "rejected")
+            self.assertTrue(result.risk["violations"])
+            self.assertIn("REJECTED", result.message)
+
+    def test_tool_cannot_bypass_risk(self):
+        """Oversized trade through the tool: rejected, balance untouched."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._stack(
+                tmpdir, TRADING_ENABLED="true",
+                PAPER_TRADING_ENABLED="true",
+            )
+            result = tool.run(
+                {"action": "submit", "symbol": "AAPL",
+                 "side": "buy", "quantity": 100000,
+                 "current_price": 150.0}
+            )
+            self.assertFalse(result.success)
+            balance = tool.run({"action": "balance"})
+            self.assertEqual(balance.data["balance"], 10000.0)
+            self.assertEqual(len(tool.paper.get_positions()), 0)
+
+    def test_submit_fills_when_allowed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = self._stack(
+                tmpdir, TRADING_ENABLED="true",
+                PAPER_TRADING_ENABLED="true",
+            )
+            result = tool.run(
+                {"action": "submit", "symbol": "AAPL",
+                 "side": "buy", "quantity": 10,
+                 "current_price": 150.0}
+            )
+            self.assertTrue(result.success)
+            self.assertIn("PAPER TRADE", result.message)
+
+
+class TestRiskExplanation(unittest.TestCase):
+    """Test structured risk explanations (veto logic untouched)."""
+
+    def test_format_rejection(self):
+        from agent.risk.engine import format_rejection
+
+        engine = RiskEngine(max_position_size=100)
+        check = engine.evaluate(
+            TradeProposal(
+                symbol="AAPL", side="buy", quantity=200,
+                price=100.0, order_type="market",
+                timestamp=datetime.now(), metadata={},
+            )
+        )
+        text = format_rejection(check)
+        self.assertIn("REJECTED", text)
+        self.assertIn("Reason:", text)
+        self.assertIn("200", text)
+
+    def test_format_approval(self):
+        from agent.risk.engine import format_rejection
+
+        engine = RiskEngine()
+        check = engine.evaluate(
+            TradeProposal(
+                symbol="AAPL", side="buy", quantity=1,
+                price=100.0, order_type="market",
+                timestamp=datetime.now(), metadata={},
+            )
+        )
+        self.assertIn("APPROVED", format_rejection(check))
+
+
+class TestAgentCLI(unittest.TestCase):
+    """Test CLI tool commands and natural-language shortcuts."""
+
+    def _agent(self, tmpdir):
+        from agent.core.config import Config
+        from agent.tools.registry import build_default_registry
+
+        reset_config()
+        memory = MemoryStore(storage_path=os.path.join(tmpdir, "m.db"))
+        tasks = TaskManager(storage_path=os.path.join(tmpdir, "t.db"))
+        risk = RiskEngine()
+        paper = PaperTradingEngine(
+            storage_path=os.path.join(tmpdir, "p.db"), risk_engine=risk
+        )
+        registry = build_default_registry(
+            Config(), paper, risk, memory, tasks
+        )
+        agent = WellPaiDAgent(registry=registry)
+        self.addCleanup(reset_config)
+        return agent
+
+    def _capture(self, func, *args):
+        import io
+        import sys
+
+        old = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            func(*args)
+            return sys.stdout.getvalue()
+        finally:
+            sys.stdout = old
+
+    def test_tools_lists_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = self._agent(tmpdir)
+            output = self._capture(agent._process_command, "tools")
+            self.assertIn("calculator", output)
+            self.assertIn("paper_account", output)
+
+    def test_run_calculator(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = self._agent(tmpdir)
+            output = self._capture(
+                agent._process_command, "run calculator expression=6*7"
+            )
+            self.assertIn("42", output)
+
+    def test_run_unknown_tool(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = self._agent(tmpdir)
+            output = self._capture(agent._process_command, "run shell cmd=x")
+            self.assertIn("unknown tool", output)
+
+    def test_natural_remember(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = self._agent(tmpdir)
+            output = self._capture(
+                agent._process_command, "remember that I prefer crypto"
+            )
+            self.assertIn("remembered", output)
+            found = agent.tools.execute(
+                "memory", {"action": "search", "query": "crypto"}
+            )
+            self.assertEqual(len(found.data["matches"]), 1)
+
+    def test_natural_remind(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = self._agent(tmpdir)
+            output = self._capture(
+                agent._process_command, "remind me to review my CAD portfolio"
+            )
+            self.assertIn("task created", output)
+
+    def test_natural_price(self):
+        import agent.trading.brokers as brokers
+
+        original = brokers._http_get_text
+        brokers._http_get_text = (
+            lambda url, timeout=15: "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
+            "AAPL,01/02/2024,22:00,100,101,99,100.5,1000\n"
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                agent = self._agent(tmpdir)
+                output = self._capture(
+                    agent._process_command, "price of AAPL"
+                )
+        finally:
+            brokers._http_get_text = original
+        self.assertIn("100.5", output)
 
 
 if __name__ == "__main__":

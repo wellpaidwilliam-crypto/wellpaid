@@ -38,6 +38,27 @@ class TradeProposal:
     metadata: dict[str, Any]
 
 
+def format_rejection(check: RiskCheck) -> str:
+    """Render a human-readable explanation of a risk decision.
+
+    Read-only: explains WHY without touching veto logic. Used by the
+    agent layer and API so rejections are interpretable, e.g.::
+
+        REJECTED
+        Reason: Trade rejected: 1 violation(s)
+        - Trade notional 200000.0 exceeds max 100000.0
+
+    Args:
+        check: The RiskCheck to explain.
+    """
+    lines = [check.decision.value.upper(), f"Reason: {check.reason}"]
+    for violation in check.violations:
+        lines.append(f"- {violation}")
+    if not check.violations:
+        lines.append("- no violations recorded")
+    return "\n".join(lines)
+
+
 class RiskEngine:
     """Risk management engine with authority to approve/reject trades.
     

@@ -56,6 +56,7 @@ class WellPaiDHandler(BaseHTTPRequestHandler):
     risk: Optional[RiskEngine] = None
     stooq: StooqDataProvider = None  # type: ignore[assignment]
     coinbase: CoinbaseDataProvider = None  # type: ignore[assignment]
+    tools: Any = None  # ToolRegistry, attached by factory
 
     server_version = "WellPaiD/0.3"
 
@@ -139,8 +140,24 @@ class WellPaiDHandler(BaseHTTPRequestHandler):
                 self._send(200, {"risk_engine": True, **self.risk.get_status()})
         elif parsed.path == "/price":
             self._handle_price(parse_qs(parsed.query))
+        elif parsed.path == "/tools":
+            self._send(200, {"tools": self.tools.list()})
         else:
             self._send(404, {"error": "not found"})
+
+    def _handle_tool_execute(self) -> None:
+        """Run a registry tool. Auth already verified; each tool enforces
+        its own gates (paper tool refuses unless paper mode is enabled)."""
+        body = self._read_json()
+        if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+            self._send(400, {"error": "tool name required"})
+            return
+        args = body.get("args") or {}
+        if not isinstance(args, dict):
+            self._send(400, {"error": "args must be an object"})
+            return
+        result = self.tools.execute(body["name"], args)
+        self._send(200 if result.success else 422, result.to_dict())
 
     def _handle_price(self, query: dict) -> None:
         symbol = (query.get("symbol") or [""])[0].strip()
@@ -173,6 +190,9 @@ class WellPaiDHandler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized"})
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/tools/execute":
+            self._handle_tool_execute()
+            return
         if parsed.path != "/orders":
             self._send(404, {"error": "not found"})
             return
@@ -224,6 +244,8 @@ def create_server(
     config: Optional[Config] = None,
     paper: Optional[PaperTradingEngine] = None,
     risk: Optional[RiskEngine] = None,
+    memory: Any = None,
+    tasks: Any = None,
     api_token: Optional[str] = None,
 ) -> ThreadingHTTPServer:
     """Create (not start) the API server with shared context.
@@ -234,21 +256,32 @@ def create_server(
         config: App config (fresh default if None).
         paper: Paper engine (fresh default if None).
         risk: Optional risk engine attached to the paper engine.
+        memory: Optional MemoryStore (enables the memory tool).
+        tasks: Optional TaskManager (enables the tasks tool).
         api_token: Bearer token, or WELLPAID_API_TOKEN env.
 
     Raises:
         ValueError: If no API token is configured (fail-closed).
     """
+    try:
+        from agent.tools.registry import build_default_registry
+    except ImportError:
+        from ..tools.registry import build_default_registry
     token = resolve_token(api_token)
+    resolved_config = config or Config()
+    resolved_paper = paper if paper is not None else PaperTradingEngine()
     handler = type(
         "BoundHandler",
         (WellPaiDHandler,),
         {
-            "config": config or Config(),
-            "paper": paper if paper is not None else PaperTradingEngine(),
+            "config": resolved_config,
+            "paper": resolved_paper,
             "risk": risk,
             "stooq": StooqDataProvider(),
             "coinbase": CoinbaseDataProvider(),
+            "tools": build_default_registry(
+                resolved_config, resolved_paper, risk, memory, tasks
+            ),
         },
     )
     server = ThreadingHTTPServer((host, port), handler)

@@ -79,9 +79,29 @@ only when `TRADING_ENABLED` and `PAPER_TRADING_ENABLED` are both true.
 ```powershell
 $env:WELLPAID_API_TOKEN = "<generate with secrets.token_hex(32)>"
 python -c "from agent.api.server import create_server; create_server(api_token='...').serve_forever()"
-# GET /status /account /positions /orders /risk /price?symbol=AAPL
+# GET /status /account /positions /orders /risk /price?symbol=AAPL /tools
 # POST /orders {"symbol":"AAPL","side":"buy","quantity":10,"current_price":150.0}
+# POST /tools/execute {"name":"calculator","args":{"expression":"6*7"}}
 ```
+
+## Personal Agent (V0.4)
+
+The CLI is now a tool-driven agent. Capabilities live in
+`agent/tools/` (calculator, memory, tasks, market_data, backtest,
+paper_account, system_status) behind a `ToolRegistry` — the only way
+the agent layer invokes behavior. There is no shell/Python execution
+tool, by design.
+
+```
+WellPaiD> tools                              # list agent tools
+WellPaiD> run calculator expression="(150.5*10)+25"
+WellPaiD> remember that I prefer crypto research
+WellPaiD> remind me to review my CAD portfolio
+WellPaiD> price of AAPL
+```
+
+**LIVE TRADING DOES NOT EXIST.** Research, backtests and paper trades
+are simulated; every submit passes the risk veto first.
 
 ## Safety Features
 

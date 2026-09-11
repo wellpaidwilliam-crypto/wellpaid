@@ -118,6 +118,26 @@ All logs pass through a sensitive data filter that redacts:
 4. **Verify risk engine** can reject trades
 5. **Review logs** regularly for anomalies
 
+## V0.4 Tool Safety Model
+
+- **No execution tools**: there is no shell, Python-eval or OS-command
+  tool, and `SafetyClass` has no variant that would allow one.
+- **Strict schemas**: tools reject unknown fields and wrong types;
+  every failure becomes a `ToolResult`, never an exception escape.
+- **Memory credential refusal**: the memory tool refuses content
+  resembling passwords, keys, tokens or card numbers — no secure
+  secrets system exists, so secrets never enter the database.
+- **Log hygiene**: tool execution logs names and success flags only.
+  Arguments and raw results are never logged.
+- **Paper tool**: submits refused unless paper mode is enabled;
+  proposals and submits both pass `RiskEngine`; rejections carry
+  structured explanations (`risk.decision/reason/violations`).
+- **API tools endpoint**: same Bearer auth as all endpoints; unknown
+  tools return 422, never execution.
+
+**LIVE TRADING DOES NOT EXIST.** No broker order API, no exchange
+trading API, no wallet, no deposit/withdrawal — anywhere in the tree.
+
 ## Incident Response
 
 If credentials are compromised:
