@@ -31,6 +31,8 @@ _HTTP_TIMEOUT = 15
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_LINKS = 100
 MAX_TEXT_CHARS = 20_000
+CACHE_TTL_SECONDS = 600
+CACHE_MAX_ENTRIES = 50
 
 
 def _host_allowed(host: str) -> tuple[bool, str]:
@@ -129,7 +131,35 @@ class WebFetchTool(Tool):
             "required": False,
             "description": "Max links to return (default 20, max 100).",
         },
+        "fresh": {
+            "type": "boolean",
+            "required": False,
+            "description": "Skip the cache and refetch (default false).",
+        },
     }
+
+    def __init__(self) -> None:
+        """Initialize an empty TTL cache (URL -> (stored_at, payload))."""
+        import time as _time
+
+        self._now = _time.monotonic
+        self._cache: dict[str, tuple[float, dict]] = {}
+
+    def _cached(self, url: str) -> Optional[dict]:
+        entry = self._cache.get(url)
+        if entry is None:
+            return None
+        stored_at, payload = entry
+        if self._now() - stored_at > CACHE_TTL_SECONDS:
+            del self._cache[url]
+            return None
+        return payload
+
+    def _store(self, url: str, payload: dict) -> None:
+        while len(self._cache) >= CACHE_MAX_ENTRIES:
+            oldest = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
+            del self._cache[oldest]
+        self._cache[url] = (self._now(), payload)
 
     def execute(self, args: dict) -> ToolResult:
         url = args["url"].strip()
@@ -148,6 +178,18 @@ class WebFetchTool(Tool):
         if isinstance(max_links, bool) or not isinstance(max_links, int):
             return ToolResult(False, "max_links must be an integer")
         max_links = max(0, min(MAX_LINKS, max_links))
+        if not args.get("fresh", False):
+            cached = self._cached(url)
+            if cached is not None:
+                links = cached.get("links", [])[:max_links]
+                return ToolResult(
+                    True,
+                    f"{cached.get('title') or cached.get('url')}: "
+                    f"{len(cached.get('text', ''))} chars, {len(links)} link(s)",
+                    data={**cached, "links": links},
+                    warnings=cached.get("warnings", [])
+                    + ["served from cache (10 min TTL); pass fresh=true to refetch"],
+                )
         try:
             req = urllib.request.Request(
                 url, headers={"User-Agent": "WellPaiD-Trader/0.5 (research)"}
@@ -178,27 +220,42 @@ class WebFetchTool(Tool):
                     "href": urllib.parse.urljoin(final_url, link["href"]),
                     "text": link["text"][:200],
                 }
-                for link in extractor.links[:max_links]
+                for link in extractor.links
             ]
             warnings = ["no JavaScript was executed; dynamic content is absent"]
             if truncated:
                 warnings.append("body truncated at 2 MiB")
+            payload = {
+                "url": final_url,
+                "title": title,
+                "text": text,
+                "links": links,
+                "warnings": warnings,
+            }
+            self._store(url, payload)
+            shown = links[:max_links]
             return ToolResult(
                 True,
-                f"{title or final_url}: {len(text)} chars, {len(links)} link(s)",
-                data={
-                    "url": final_url,
-                    "title": title,
-                    "text": text,
-                    "links": links,
-                },
+                f"{title or final_url}: {len(text)} chars, {len(shown)} link(s)",
+                data={**payload, "links": shown},
                 warnings=warnings,
             )
         text = raw.decode("utf-8", errors="replace")[:MAX_TEXT_CHARS]
+        warnings = ["non-HTML content returned as plain text"]
+        if truncated:
+            warnings.append("body truncated at 2 MiB")
+        payload = {
+            "url": final_url,
+            "title": "",
+            "text": text,
+            "links": [],
+            "content_type": content_type,
+            "warnings": warnings,
+        }
+        self._store(url, payload)
         return ToolResult(
             True,
             f"{final_url}: {content_type}, {len(raw)} bytes",
-            data={"url": final_url, "content_type": content_type, "text": text},
-            warnings=["non-HTML content returned as plain text"]
-            + (["body truncated at 2 MiB"] if truncated else []),
+            data={**payload, "links": []},
+            warnings=warnings,
         )

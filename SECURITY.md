@@ -143,6 +143,39 @@ All logs pass through a sensitive data filter that redacts:
 **LIVE TRADING DOES NOT EXIST.** No broker order API, no exchange
 trading API, no wallet, no deposit/withdrawal — anywhere in the tree.
 
+## Exposing the API Beyond Localhost
+
+The API binds `127.0.0.1` with plain HTTP by default. That is safe on
+a single-user machine and unsafe anywhere else. To serve it remotely:
+
+1. **Never expose the stdlib server directly.** Put it behind a
+   reverse proxy (Caddy, nginx) that terminates TLS — the app has no
+   TLS support and must never gain `ssl` bypasses or `verify=False`
+   equivalents.
+2. **Example (Caddy):** `yourdomain.tld { reverse_proxy 127.0.0.1:PORT }`
+   gets you automatic HTTPS. Firewall everything except 443.
+3. **Keep Bearer auth on.** TLS encrypts but does not authenticate;
+   the token is still required on every request.
+4. **Do not bind `0.0.0.0` in the app** unless the host firewall
+   restricts ingress to the proxy.
+
+## API Token Rotation
+
+Tokens are bearer credentials: whoever holds one has full API access.
+
+1. **Generate:** `python -c "import secrets; print(secrets.token_hex(32))"`
+   (64 hex chars, 256 bits). Never reuse passwords or short tokens.
+2. **Store:** environment (`WELLPAID_API_TOKEN`) or a secrets manager.
+   Never in code, chat logs, screenshots, or the repo.
+3. **Rotate:** replace the env value and restart the server. Old tokens
+   die instantly — there is no grace period, allowlist, or revocation
+   list by design (single-token model).
+4. **If leaked:** rotate immediately, then check paper account state
+   (`GET /account`, `/orders`) for unexpected activity. There is no
+   live money at risk, but paper state may need `reset`.
+5. **Cadence:** rotate on personnel change, on any suspected exposure,
+   and at least every 90 days.
+
 ## Incident Response
 
 If credentials are compromised:

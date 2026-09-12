@@ -39,11 +39,19 @@ Stdlib-only dependency policy upheld: no third-party packages added.
 - ✅ webfetch tool (GET-only, 2 MiB cap, no JS, link-local refused)
 - ✅ 107 automated tests (94 V0.4 preserved + 13 new)
 
-### V0.6 - Personal-Agent Depth, Batch B (Current)
+### V0.6 - Personal-Agent Depth, Batch B
 
 - ✅ CI on current GitHub Actions majors (checkout v5, setup-python v6)
 - ✅ docx tool (.docx via stdlib zip/xml: info/text/tables)
 - ✅ tasks due_date passthrough (YYYY-MM-DD) + `due` action with overdue flags
+
+### V0.7 - Realism, Memory, Hardening + Site (Current)
+
+- ✅ Backtester fees/slippage (bps per fill) + seeded deterministic mock data
+- ✅ Webfetch TTL cache (10 min, 50 entries, `fresh` bypass)
+- ✅ Memory search ranked by term frequency, recency tiebreak
+- ✅ API remote-exposure + token rotation docs (TLS via reverse proxy)
+- ✅ GitHub Pages site (`docs/`, static, `.nojekyll`)
 
 ### V2 - Enhanced Research
 

@@ -106,8 +106,17 @@ class MockDataProvider(DataProvider):
     """Mock data provider for testing and development.
     
     Provides sample market data without connecting to real exchanges.
+    Pass a seed for deterministic, reproducible series.
     """
     
+    def __init__(self, seed: Optional[int] = None) -> None:
+        """Initialize mock provider.
+        
+        Args:
+            seed: Random seed for reproducible data (None = non-deterministic).
+        """
+        self.seed = seed
+
     def get_historical_data(
         self,
         symbol: str,
@@ -117,6 +126,8 @@ class MockDataProvider(DataProvider):
     ) -> Optional[MarketData]:
         """Generate mock historical data."""
         import random
+
+        rng = random.Random(self.seed)
         
         # Generate sample OHLCV data
         data = []
@@ -125,11 +136,11 @@ class MockDataProvider(DataProvider):
         
         while current_date <= end_date:
             # Random walk for price
-            change = random.uniform(-0.05, 0.05)
+            change = rng.uniform(-0.05, 0.05)
             close = base_price * (1 + change)
-            high = close * (1 + random.uniform(0, 0.02))
-            low = close * (1 - random.uniform(0, 0.02))
-            volume = random.uniform(1000, 10000)
+            high = close * (1 + rng.uniform(0, 0.02))
+            low = close * (1 - rng.uniform(0, 0.02))
+            volume = rng.uniform(1000, 10000)
             
             data.append(OHLCV(
                 timestamp=current_date,
@@ -339,13 +350,33 @@ class Backtester:
     For research purposes only - past performance does not indicate future results.
     """
     
-    def __init__(self, initial_capital: float = 10000.0) -> None:
+    def __init__(
+        self,
+        initial_capital: float = 10000.0,
+        fee_bps: float = 0.0,
+        slippage_bps: float = 0.0,
+    ) -> None:
         """Initialize backtester.
         
         Args:
             initial_capital: Starting capital for simulation
+            fee_bps: Commission per fill in basis points of notional
+                (e.g. 10.0 = 0.10% per side).
+            slippage_bps: Adverse price move per fill in basis points
+                (buys fill higher, sells fill lower).
         """
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be positive")
+        if fee_bps < 0 or slippage_bps < 0:
+            raise ValueError("fee_bps and slippage_bps must be non-negative")
         self.initial_capital = initial_capital
+        self.fee_bps = fee_bps
+        self.slippage_bps = slippage_bps
+
+    def _fill_price(self, quoted: float, side: OrderSide) -> float:
+        """Apply slippage: buys worse (higher), sells worse (lower)."""
+        slip = quoted * self.slippage_bps / 10_000.0
+        return quoted + slip if side == OrderSide.BUY else quoted - slip
     
     def run(
         self,
@@ -364,29 +395,39 @@ class Backtester:
         signals = strategy.generate_signals(data)
         result = BacktestResult()
         
-        # Simplified backtest logic
+        # Simplified backtest logic (close-price fills + costs)
         capital = self.initial_capital
         position = 0.0
+        total_fees = 0.0
         
         for signal in signals:
             if signal.side == OrderSide.BUY and capital > 0:
                 # Buy
-                shares = capital / data.data[-1].close
+                fill = self._fill_price(data.data[-1].close, OrderSide.BUY)
+                fee = capital * self.fee_bps / 10_000.0
+                total_fees += fee
+                shares = (capital - fee) / fill
                 position = shares
                 capital = 0.0
                 result.trades.append({
                     "type": "buy",
-                    "price": data.data[-1].close,
+                    "price": fill,
                     "shares": shares,
+                    "fee": fee,
                     "timestamp": signal.timestamp.isoformat(),
                 })
             elif signal.side == OrderSide.SELL and position > 0:
                 # Sell
-                capital = position * data.data[-1].close
+                fill = self._fill_price(data.data[-1].close, OrderSide.SELL)
+                proceeds = position * fill
+                fee = proceeds * self.fee_bps / 10_000.0
+                total_fees += fee
+                capital = proceeds - fee
                 result.trades.append({
                     "type": "sell",
-                    "price": data.data[-1].close,
+                    "price": fill,
                     "shares": position,
+                    "fee": fee,
                     "timestamp": signal.timestamp.isoformat(),
                 })
                 position = 0.0
@@ -405,6 +446,9 @@ class Backtester:
             "initial_capital": self.initial_capital,
             "final_value": final_value,
             "total_trades": len(result.trades),
+            "total_fees": total_fees,
+            "fee_bps": self.fee_bps,
+            "slippage_bps": self.slippage_bps,
             "disclaimer": "Past performance does not indicate future results",
         }
         

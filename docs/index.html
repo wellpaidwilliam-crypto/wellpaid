@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WellPaiD Trader — Personal AI Agent for Trading Research</title>
+<meta name="description" content="WellPaiD Trader: a stdlib-only personal AI agent for trading research, backtesting and paper trading. Research-only: no live trading.">
+<style>
+:root { color-scheme: dark; --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e;
+  --accent: #58a6ff; --card: #161b22; --border: #30363d; --warn: #d29922; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 48px 20px 80px; }
+h1 { font-size: 2.2rem; margin: 0 0 8px; }
+h2 { margin-top: 48px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+a { color: var(--accent); }
+.badge { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 12px; font-size: .85rem; color: var(--muted); margin-right: 8px; }
+.notice { border: 1px solid var(--warn); border-radius: 8px; padding: 12px 16px; margin: 24px 0; }
+.notice strong { color: var(--warn); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.card h3 { margin: 0 0 6px; font-size: 1rem; }
+.card p { margin: 0; color: var(--muted); font-size: .92rem; }
+code, pre { font-family: ui-monospace, Consolas, monospace; }
+pre { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; overflow-x: auto; font-size: .88rem; }
+footer { margin-top: 64px; color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>WellPaiD Trader</h1>
+<p>A modular personal AI agent for trading research, strategy development and paper trading — with strict safety controls.</p>
+<p>
+<span class="badge">Python 3.11–3.14</span>
+<span class="badge">stdlib-only</span>
+<span class="badge">SQLite</span>
+<span class="badge">110+ tests</span>
+<span class="badge">CI: ubuntu + windows</span>
+</p>
+<div class="notice"><strong>Research-only.</strong> Live trading does not exist in this project: no broker order APIs, no exchange trading APIs, no wallet, no deposits or withdrawals. Paper trading uses simulated money behind a risk veto.</div>
+
+<h2>Quick start</h2>
+<pre>git clone https://github.com/wellpaidwilliam-crypto/wellpaid
+cd wellpaid
+python -m agent.core.main
+# python -m unittest discover tests -v</pre>
+
+<h2>What it does</h2>
+<div class="grid">
+<div class="card"><h3>Tool-driven agent</h3><p>Calculator, memory, tasks, market data, backtest, paper account and document tools behind one safe registry. No shell execution, by design.</p></div>
+<div class="card"><h3>Risk veto</h3><p>Every paper proposal passes quantity, notional, exposure, loss and drawdown checks. Rejections explain why.</p></div>
+<div class="card"><h3>Read-only market data</h3><p>Global stocks via Stooq, crypto via Coinbase public endpoints. No keys, no trading endpoints.</p></div>
+<div class="card"><h3>Honest backtests</h3><p>SMA research with fees/slippage modeling, labeled HISTORICAL — never presented as prediction.</p></div>
+<div class="card"><h3>Document tools</h3><p>Read xlsx, docx, PDF and DXF drawings with the standard library. Sandboxed paths, capped sizes.</p></div>
+<div class="card"><h3>Authenticated API</h3><p>Bearer-token localhost API for status, account, risk and tools. Fail-closed without a token.</p></div>
+</div>
+
+<h2>Safety model</h2>
+<ul>
+<li>Trading disabled by default (<code>TRADING_ENABLED=false</code>); validation is fail-closed.</li>
+<li>AI/tool requests cannot bypass <code>RiskEngine</code> — tested explicitly.</li>
+<li>Memory refuses credential-like content; logs redact secrets including format args.</li>
+<li>Paper engine: no margin, no naked shorts, balance-checked fills.</li>
+</ul>
+
+<h2>Links</h2>
+<ul>
+<li><a href="https://github.com/wellpaidwilliam-crypto/wellpaid">Repository</a></li>
+<li><a href="https://github.com/wellpaidwilliam-crypto/wellpaid/actions">CI status</a></li>
+<li><a href="https://github.com/wellpaidwilliam-crypto/wellpaid/blob/master/SECURITY.md">Security model</a></li>
+<li><a href="https://github.com/wellpaidwilliam-crypto/wellpaid/blob/master/ARCHITECTURE.md">Architecture</a></li>
+</ul>
+
+<footer>WellPaiD Trader · research software, not financial advice.</footer>
+</main>
+</body>
+</html>

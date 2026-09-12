@@ -140,7 +140,11 @@ class MemoryStore:
         category: Optional[str] = None,
         limit: int = 10,
     ) -> list[Memory]:
-        """Search memories.
+        """Search memories, ranked by relevance.
+        
+        Ranking: term-frequency in content first, then newest. A query
+        that appears twice in one memory outranks a single mention;
+        category-only searches stay newest-first.
         
         Args:
             query: Search query (searches content)
@@ -156,16 +160,20 @@ class MemoryStore:
         if category:
             results = [m for m in results if m.category == category]
         
-        # Filter by query
+        # Filter and rank by query
         if query:
             query_lower = query.lower()
-            results = [
-                m for m in results
-                if query_lower in m.content.lower()
-            ]
-        
-        # Sort by creation time (newest first)
-        results.sort(key=lambda m: m.created_at, reverse=True)
+            scored = []
+            for m in results:
+                hits = m.content.lower().count(query_lower)
+                if hits > 0:
+                    scored.append((hits, m.created_at, m))
+            # Most mentions first, newest breaks ties.
+            scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            results = [m for _, _, m in scored]
+        else:
+            # Sort by creation time (newest first)
+            results.sort(key=lambda m: m.created_at, reverse=True)
         
         # Apply limit
         return results[:limit]

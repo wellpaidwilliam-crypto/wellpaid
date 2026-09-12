@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.6.0")
+        self.assertEqual(agent.version, "0.7.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -1727,6 +1727,142 @@ class TestWebFetchTool(unittest.TestCase):
 
         result = WebFetchTool().run({"url": "http://127.0.0.1:1/"})
         self.assertFalse(result.success)
+
+
+class TestRealisticBacktest(unittest.TestCase):
+    """Test fees/slippage modeling and seeded mock data."""
+
+    def _market(self, seed):
+        from agent.trading.research import AssetType, MockDataProvider
+
+        return MockDataProvider(seed=seed).get_historical_data(
+            "AAPL", AssetType.STOCK, datetime(2024, 1, 1), datetime(2024, 6, 30)
+        )
+
+    def test_seeded_mock_is_deterministic(self):
+        first = [b.close for b in self._market(7).data]
+        second = [b.close for b in self._market(7).data]
+        third = [b.close for b in self._market(8).data]
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, third)
+
+    def test_fees_reduce_return(self):
+        from agent.trading.research import Backtester, SMAcrossoverStrategy
+
+        market = self._market(7)
+        strategy = SMAcrossoverStrategy(short_period=5, long_period=10)
+        free = Backtester().run(strategy, market)
+        priced = Backtester(fee_bps=100, slippage_bps=50).run(strategy, market)
+        self.assertGreaterEqual(priced.metadata["total_fees"], 0.0)
+        if free.metadata["total_trades"]:
+            self.assertGreater(priced.metadata["total_fees"], 0.0)
+            self.assertLess(
+                priced.metadata["final_value"], free.metadata["final_value"]
+            )
+
+    def test_invalid_costs_rejected(self):
+        from agent.trading.research import Backtester
+
+        with self.assertRaises(ValueError):
+            Backtester(fee_bps=-1)
+        with self.assertRaises(ValueError):
+            Backtester(slippage_bps=-5)
+        with self.assertRaises(ValueError):
+            Backtester(initial_capital=0)
+
+    def test_tool_passes_costs_and_seed(self):
+        from agent.tools.catalog import BacktestTool
+
+        result = BacktestTool().run(
+            {"symbol": "AAPL", "days": 120, "source": "mock",
+             "seed": 7, "fee_bps": 10, "slippage_bps": 5}
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["fee_bps"], 10)
+        self.assertEqual(result.data["slippage_bps"], 5)
+        self.assertIn("mock(seed=7)", result.data["source"])
+        self.assertIn("costs 10", result.message)
+        bad = BacktestTool().run(
+            {"symbol": "AAPL", "days": 120, "source": "mock",
+             "fee_bps": -1}
+        )
+        self.assertFalse(bad.success)
+
+
+class TestMemoryRanking(unittest.TestCase):
+    """Test relevance-ranked memory search."""
+
+    def test_term_frequency_outranks_recency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                storage_path=os.path.join(tmpdir, "m.db")
+            )
+            store.save("crypto is risky", category="t")
+            store.save("crypto crypto crypto markets", category="t")
+            results = store.search(query="crypto")
+            self.assertEqual(len(results), 2)
+            self.assertIn("markets", results[0].content)
+
+    def test_category_only_stays_newest_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                storage_path=os.path.join(tmpdir, "m.db")
+            )
+            store.save("first note", category="t")
+            store.save("second note", category="t")
+            results = store.search(category="t")
+            self.assertEqual(results[0].content, "second note")
+
+
+class TestWebCache(unittest.TestCase):
+    """Test webfetch TTL cache behavior."""
+
+    def _serve_counted(self, calls):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                calls.append(1)
+                payload = b"<html><head><title>T</title></head><body><p>Hi</p></body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return f"http://127.0.0.1:{server.server_address[1]}/"
+
+    def test_second_fetch_served_from_cache(self):
+        from agent.tools.web import WebFetchTool
+
+        calls = []
+        url = self._serve_counted(calls)
+        tool = WebFetchTool()
+        first = tool.run({"url": url})
+        self.assertTrue(first.success)
+        second = tool.run({"url": url})
+        self.assertTrue(second.success)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any("cache" in w for w in second.warnings))
+
+    def test_fresh_bypasses_cache(self):
+        from agent.tools.web import WebFetchTool
+
+        calls = []
+        url = self._serve_counted(calls)
+        tool = WebFetchTool()
+        tool.run({"url": url})
+        tool.run({"url": url, "fresh": True})
+        self.assertEqual(len(calls), 2)
 
 
 class TestAgentCLI(unittest.TestCase):

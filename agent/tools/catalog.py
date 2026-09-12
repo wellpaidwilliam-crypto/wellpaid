@@ -506,6 +506,21 @@ class BacktestTool(Tool):
             "required": False,
             "description": "auto|mock (mock = synthetic data for offline use)",
         },
+        "seed": {
+            "type": "integer",
+            "required": False,
+            "description": "Random seed for mock data (reproducible runs).",
+        },
+        "fee_bps": {
+            "type": "number",
+            "required": False,
+            "description": "Commission per fill in basis points (default 0).",
+        },
+        "slippage_bps": {
+            "type": "number",
+            "required": False,
+            "description": "Adverse move per fill in basis points (default 0).",
+        },
     }
 
     HONESTY = (
@@ -527,12 +542,24 @@ class BacktestTool(Tool):
             return ToolResult(False, "days must be 60..365")
         end = datetime.now()
         start = end - timedelta(days=days)
+        fee_bps = args.get("fee_bps", 0.0)
+        slippage_bps = args.get("slippage_bps", 0.0)
+        for label, value in (("fee_bps", fee_bps), ("slippage_bps", slippage_bps)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return ToolResult(False, f"{label} must be a number")
+            if value < 0 or value > 10_000:
+                return ToolResult(False, f"{label} must be 0..10000")
         try:
             if args.get("source", "auto") == "mock":
-                market = MockDataProvider().get_historical_data(
+                seed = args.get("seed")
+                if seed is not None and (
+                    isinstance(seed, bool) or not isinstance(seed, int)
+                ):
+                    return ToolResult(False, "seed must be an integer")
+                market = MockDataProvider(seed=seed).get_historical_data(
                     symbol, asset_type, start, end
                 )
-                source = "mock"
+                source = f"mock(seed={seed})" if seed is not None else "mock"
             else:
                 provider = _provider_for(asset_type)
                 market = provider.get_historical_data(symbol, asset_type, start, end)
@@ -550,13 +577,20 @@ class BacktestTool(Tool):
                 warnings=[self.HONESTY],
             )
         strategy = SMAcrossoverStrategy()
-        result = Backtester().run(strategy, market)
+        result = Backtester(
+            fee_bps=fee_bps, slippage_bps=slippage_bps
+        ).run(strategy, market)
         closes = [b.close for b in market.data]
         sma20 = IndicatorEngine.sma(market.data, 20)
+        cost_note = (
+            f"costs {fee_bps}bps fee + {slippage_bps}bps slippage"
+            if (fee_bps or slippage_bps)
+            else "no costs modeled"
+        )
         return ToolResult(
             True,
             f"{symbol}: {strategy.get_name()}, return {result.total_return:.2%} "
-            f"over {len(market.data)} bars. {self.HONESTY}",
+            f"over {len(market.data)} bars ({cost_note}). {self.HONESTY}",
             data={
                 "symbol": symbol,
                 "strategy": strategy.get_name(),
@@ -564,12 +598,15 @@ class BacktestTool(Tool):
                 "total_return": result.total_return,
                 "win_rate": result.win_rate,
                 "trades": len(result.trades),
+                "total_fees": result.metadata.get("total_fees", 0.0),
+                "fee_bps": fee_bps,
+                "slippage_bps": slippage_bps,
                 "last_close": closes[-1],
                 "sma20_last": sma20[-1] if sma20 else None,
                 "source": source,
                 "assumptions": [
                     "fills at bar close",
-                    "no fees, spread or slippage",
+                    cost_note,
                     "single position, full capital per signal",
                 ],
             },
