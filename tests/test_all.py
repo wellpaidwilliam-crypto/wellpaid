@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.8.0")
+        self.assertEqual(agent.version, "0.9.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -1146,6 +1146,34 @@ class TestMemoryTaskTools(unittest.TestCase):
             found = tool.run({"action": "search", "query": "crypto"})
             self.assertTrue(found.success)
             self.assertEqual(len(found.data["matches"]), 1)
+
+    def test_memory_export(self):
+        import json as _json
+
+        from agent.tools.catalog import MemoryTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MemoryStore(
+                storage_path=os.path.join(tmpdir, "m.db")
+            )
+            tool = MemoryTool(store)
+            tool.run({"action": "remember", "content": "I prefer crypto"})
+            tool.run(
+                {"action": "remember", "content": " forex note",
+                 "category": "trading"}
+            )
+            md = tool.run({"action": "export"})
+            self.assertTrue(md.success)
+            self.assertEqual(md.data["format"], "markdown")
+            self.assertEqual(md.data["count"], 2)
+            self.assertIn("## trading", md.data["document"])
+            js = tool.run({"action": "export", "format": "json"})
+            self.assertTrue(js.success)
+            parsed = _json.loads(js.data["document"])
+            self.assertEqual(len(parsed), 2)
+            self.assertFalse(
+                tool.run({"action": "export", "format": "xml"}).success
+            )
 
     def test_memory_refuses_secrets(self):
         from agent.tools.catalog import MemoryTool

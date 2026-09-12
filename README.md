@@ -48,7 +48,7 @@ WellPaiD-Trader/
 │   ├── risk/             # Risk engine (quantity + notional limits)
 │   ├── tools/            # External tools
 │   └── trading/          # Research, paper trading, read-only brokers
-├── tests/              # Test suite (125 tests)
+├── tests/              # Test suite (126 tests)
 ├── .env.example        # Configuration template
 └── README.md           # This file
 ```

@@ -161,14 +161,15 @@ class MemoryTool(Tool):
     name = "memory"
     description = (
         "Remember facts ('remember'), search memory ('search'), "
-        "recall by id ('recall'), list categories ('categories')."
+        "recall by id ('recall'), list categories ('categories'), "
+        "export a backup ('export' as markdown|json)."
     )
     safety = SafetyClass.LOCAL_WRITE
     schema = {
         "action": {
             "type": "string",
             "required": True,
-            "description": "remember|search|recall|categories",
+            "description": "remember|search|recall|categories|export",
         },
         "content": {
             "type": "string",
@@ -195,7 +196,14 @@ class MemoryTool(Tool):
             "required": False,
             "description": "Max results (default 10).",
         },
+        "format": {
+            "type": "string",
+            "required": False,
+            "description": "Export format: markdown|json (default markdown).",
+        },
     }
+
+    MAX_EXPORT = 500
 
     def __init__(self, store: Any) -> None:
         """Attach an existing MemoryStore (never creates a second one)."""
@@ -263,6 +271,52 @@ class MemoryTool(Tool):
         if action == "categories":
             return ToolResult(
                 True, "categories listed", data={"categories": self.store.list_categories()}
+            )
+        if action == "export":
+            fmt = args.get("format", "markdown")
+            if fmt not in ("markdown", "json"):
+                return ToolResult(False, "format must be markdown|json")
+            memories = self.store.search(
+                category=args.get("category"), limit=self.MAX_EXPORT
+            )
+            if fmt == "json":
+                import json as _json
+
+                document = _json.dumps(
+                    [
+                        {
+                            "id": m.id,
+                            "content": m.content,
+                            "category": m.category,
+                            "created_at": m.created_at,
+                        }
+                        for m in memories
+                    ],
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            else:
+                lines = ["# Memory export", ""]
+                current_category = None
+                for m in sorted(memories, key=lambda x: (x.category, x.created_at)):
+                    if m.category != current_category:
+                        current_category = m.category
+                        lines.append(f"## {current_category}")
+                        lines.append("")
+                    lines.append(f"- {m.content} ({m.created_at[:10]}, `{m.id[:8]}`)")
+                lines.append("")
+                document = "\n".join(lines)
+            capped = self.store.count() > self.MAX_EXPORT
+            warnings = (
+                ["export capped at 500 memories; narrow by category for the rest"]
+                if capped
+                else []
+            )
+            return ToolResult(
+                True,
+                f"exported {len(memories)} memories as {fmt}",
+                data={"format": fmt, "count": len(memories), "document": document},
+                warnings=warnings,
             )
         return ToolResult(False, f"unknown action: {action}")
 

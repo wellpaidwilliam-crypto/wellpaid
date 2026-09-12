@@ -53,12 +53,16 @@ Stdlib-only dependency policy upheld: no third-party packages added.
 - ✅ API remote-exposure + token rotation docs (TLS via reverse proxy)
 - ✅ GitHub Pages site (`docs/`, static, `.nojekyll`)
 
-### V0.8 - Backtest Depth (Current)
+### V0.8 - Backtest Depth
 
 - ✅ No-lookahead incremental engine (strategy sees only past bars)
 - ✅ Per-bar equity curve, max drawdown, Sharpe (0.0 when undefined)
 - ✅ Walk-forward folds (2..5, no tuning — regime-consistency check)
 - ✅ Tool reports stats + folds; honesty labeling unchanged
+
+### V0.9 - Memory Export (Current)
+
+- ✅ `memory export` action (markdown|json backup payload, 500 cap)
 
 ### V2 - Enhanced Research
 
