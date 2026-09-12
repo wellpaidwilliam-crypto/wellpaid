@@ -60,7 +60,8 @@ Command Router  ──→  ToolRegistry
 - **documents.py** - files (sandboxed root, sensitive-name refusal),
   sheets (.xlsx via stdlib zip, formulas never evaluated), pdf
   (optional pypdf/pdfplumber, graceful install hint), dxf (read-only
-  inventory: entity counts, layers, extents)
+  inventory: entity counts, layers, extents), docx (info/text/tables
+  via stdlib zip/xml)
 - **web.py** - webfetch (GET-only, 2 MiB cap, no JS, metadata-IP refusal)
 
 ### Observability

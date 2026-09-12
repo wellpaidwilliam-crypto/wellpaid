@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.5.0")
+        self.assertEqual(agent.version, "0.6.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -1124,7 +1124,7 @@ class TestToolRegistry(unittest.TestCase):
 
         registry = build_default_registry()
         names = {t["name"] for t in registry.list()}
-        for expected in ("files", "sheets", "pdf", "dxf", "webfetch"):
+        for expected in ("files", "sheets", "pdf", "dxf", "docx", "webfetch"):
             self.assertIn(expected, names)
 
 
@@ -1573,6 +1573,92 @@ class TestDxfTool(unittest.TestCase):
                 {"action": "inventory", "path": "missing.dxf"}
             )
             self.assertFalse(result.success)
+
+
+def _write_minimal_docx(path):
+    """Build a tiny .docx with stdlib zip (heading + paras + table)."""
+    import zipfile
+
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="%s"><w:body>'
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            "<w:r><w:t>Plan</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>World</w:t></w:r></w:p>"
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            "</w:body></w:document>" % w,
+        )
+
+
+class TestDocxTool(unittest.TestCase):
+    """Test stdlib docx inspection."""
+
+    def test_info_text_tables(self):
+        from agent.tools.documents import DocxTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "doc.docx")
+            _write_minimal_docx(path)
+            tool = DocxTool(root=tmpdir)
+            info = tool.run({"action": "info", "path": "doc.docx"})
+            self.assertTrue(info.success)
+            self.assertEqual(info.data["paragraphs"], 3)
+            self.assertEqual(info.data["headings"], 1)
+            self.assertEqual(info.data["tables"], 1)
+            text = tool.run({"action": "text", "path": "doc.docx"})
+            self.assertTrue(text.success)
+            self.assertEqual(text.data["paragraphs"][0]["heading"], "Heading1")
+            self.assertEqual(text.data["paragraphs"][1]["text"], "Hello")
+            tables = tool.run({"action": "tables", "path": "doc.docx"})
+            self.assertEqual(tables.data["preview"], [[["A1", "B1"]]])
+
+    def test_rejects_non_docx(self):
+        from agent.tools.documents import DocxTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tool = DocxTool(root=tmpdir)
+            self.assertFalse(
+                tool.run({"action": "info", "path": "missing.docx"}).success
+            )
+            bad = os.path.join(tmpdir, "x.txt")
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("x")
+            self.assertFalse(
+                tool.run({"action": "info", "path": "x.txt"}).success
+            )
+
+
+class TestTaskDueDates(unittest.TestCase):
+    """Test due-date passthrough and the due action."""
+
+    def test_create_with_due_and_list_due(self):
+        from agent.tools.catalog import TaskManagerTool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(
+                storage_path=os.path.join(tmpdir, "t.db")
+            )
+            tool = TaskManagerTool(manager)
+            created = tool.run(
+                {"action": "create", "title": "Pay invoice",
+                 "due_date": "2026-09-20"}
+            )
+            self.assertTrue(created.success)
+            self.assertIn("2026-09-20", created.message)
+            bad = tool.run(
+                {"action": "create", "title": "Bad",
+                 "due_date": "tomorrow"}
+            )
+            self.assertFalse(bad.success)
+            due = tool.run({"action": "due"})
+            self.assertTrue(due.success)
+            self.assertEqual(len(due.data["tasks"]), 1)
+            self.assertEqual(due.data["tasks"][0]["due_date"], "2026-09-20")
+            self.assertIn("overdue", due.data["tasks"][0])
 
 
 class TestWebFetchTool(unittest.TestCase):

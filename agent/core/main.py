@@ -31,7 +31,7 @@ class WellPaiDAgent:
             env_file: Optional path to .env configuration file.
             registry: Optional prebuilt ToolRegistry (tests inject stores).
         """
-        self.version = "0.5.0"
+        self.version = "0.6.0"
         self.running = False
         self.config = get_config(env_file)
 

@@ -272,20 +272,25 @@ class TaskManagerTool(Tool):
 
     name = "tasks"
     description = (
-        "Manage tasks ('create' with title, 'list', 'complete'/'delete' "
-        "with task_id)."
+        "Manage tasks ('create' with title + optional due_date YYYY-MM-DD, "
+        "'list', 'due' for dated tasks, 'complete'/'delete' with task_id)."
     )
     safety = SafetyClass.LOCAL_WRITE
     schema = {
         "action": {
             "type": "string",
             "required": True,
-            "description": "create|list|complete|delete",
+            "description": "create|list|due|complete|delete",
         },
         "title": {
             "type": "string",
             "required": False,
             "description": "Task title for create.",
+        },
+        "due_date": {
+            "type": "string",
+            "required": False,
+            "description": "Due date for create (YYYY-MM-DD).",
         },
         "task_id": {
             "type": "string",
@@ -309,9 +314,18 @@ class TaskManagerTool(Tool):
             title = (args.get("title") or "").strip()
             if not title:
                 return ToolResult(False, "title is required to create a task")
-            task = self.manager.create(title)
+            due_date = args.get("due_date")
+            if due_date is not None:
+                import re as _re
+
+                if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", due_date):
+                    return ToolResult(False, "due_date must be YYYY-MM-DD")
+            task = self.manager.create(title, due_date=due_date)
             return ToolResult(
-                True, f"task created: {task.id}", data={"id": task.id, "title": title}
+                True,
+                f"task created: {task.id}"
+                + (f" (due {due_date})" if due_date else ""),
+                data={"id": task.id, "title": title, "due_date": due_date},
             )
         if action == "list":
             found = self.manager.list_tasks(limit=args.get("limit", 50))
@@ -325,8 +339,31 @@ class TaskManagerTool(Tool):
                             "title": t.title,
                             "status": t.status.value,
                             "priority": t.priority.value,
+                            "due_date": t.due_date,
                         }
                         for t in found
+                    ]
+                },
+            )
+        if action == "due":
+            today = datetime.now().strftime("%Y-%m-%d")
+            dated = [
+                t for t in self.manager.list_tasks(limit=1000) if t.due_date
+            ]
+            dated.sort(key=lambda t: t.due_date or "")
+            return ToolResult(
+                True,
+                f"{len(dated)} dated task(s)",
+                data={
+                    "tasks": [
+                        {
+                            "id": t.id,
+                            "title": t.title,
+                            "status": t.status.value,
+                            "due_date": t.due_date,
+                            "overdue": t.due_date < today,
+                        }
+                        for t in dated
                     ]
                 },
             )

@@ -573,3 +573,144 @@ class DxfTool(Tool):
                 "extents": {"min": extmin, "max": extmax},
             },
         )
+
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+MAX_DOCX_BYTES = 20 * 1024 * 1024
+MAX_DOCX_PARAS = 5_000
+
+
+def _docx_paragraph_text(para) -> tuple[str, Optional[str]]:
+    """Return (text, heading_level or None) for a w:p element."""
+    texts = [
+        t.text or ""
+        for t in para.iter(f"{{{W_NS}}}t")
+    ]
+    style = None
+    pPr = para.find(f"{{{W_NS}}}pPr")
+    if pPr is not None:
+        pStyle = pPr.find(f"{{{W_NS}}}pStyle")
+        if pStyle is not None:
+            val = (pStyle.get(f"{{{W_NS}}}val") or "")
+            if val.startswith("Heading"):
+                style = val
+    return "".join(texts), style
+
+
+class DocxTool(Tool):
+    """Read-only .docx inspection with the standard library.
+
+    Reports paragraph/table counts ('info'), extracts text with headings
+    ('text'), and previews tables ('tables'). Tracked changes, comments
+    and embedded objects are out of scope and reported as-is (ignored).
+    """
+
+    name = "docx"
+    description = (
+        "Inspect .docx documents ('info' counts, 'text' extraction, "
+        "'tables' preview). Stdlib only; no formatting preserved."
+    )
+    safety = SafetyClass.LOCAL_READ
+    schema = {
+        "action": {
+            "type": "string",
+            "required": True,
+            "description": "info|text|tables",
+        },
+        "path": {
+            "type": "string",
+            "required": True,
+            "description": "Relative .docx path under the tool root.",
+        },
+        "max_paragraphs": {
+            "type": "integer",
+            "required": False,
+            "description": "Max paragraphs for text (default 200, max 1000).",
+        },
+    }
+
+    def __init__(self, root: Any = None) -> None:
+        """Confine documents to `root` (default: current directory)."""
+        self.root = Path(root) if root is not None else Path.cwd()
+
+    def _open(self, rel: str):
+        target = _confine(self.root, rel)
+        if target is None or not target.is_file():
+            return None, ToolResult(False, "document not accessible")
+        if target.suffix.lower() != ".docx":
+            return None, ToolResult(False, "only .docx documents")
+        if target.stat().st_size > MAX_DOCX_BYTES:
+            return None, ToolResult(False, "document too large (>20 MiB)")
+        try:
+            zf = zipfile.ZipFile(target)
+            raw = zf.read("word/document.xml")
+        except (zipfile.BadZipFile, KeyError):
+            return None, ToolResult(False, "not a valid document")
+        return (zf, raw), None
+
+    def execute(self, args: dict) -> ToolResult:
+        action = args["action"]
+        opened, error = self._open(args["path"])
+        if error is not None:
+            return error
+        zf, raw = opened
+        try:
+            try:
+                body = ET.fromstring(raw).find(f"{{{W_NS}}}body")
+            except ET.ParseError:
+                return ToolResult(False, "not a valid document")
+            if body is None:
+                return ToolResult(False, "not a valid document")
+            paragraphs: list[dict] = []
+            tables: list[list[list[str]]] = []
+            for child in body:
+                tag = child.tag
+                if tag == f"{{{W_NS}}}p":
+                    text, heading = _docx_paragraph_text(child)
+                    if text.strip():
+                        paragraphs.append({"text": text, "heading": heading})
+                    if len(paragraphs) >= MAX_DOCX_PARAS:
+                        break
+                elif tag == f"{{{W_NS}}}tbl":
+                    grid = []
+                    for row in child.iter(f"{{{W_NS}}}tr"):
+                        cells = []
+                        for cell in row.iter(f"{{{W_NS}}}tc"):
+                            cell_text = "".join(
+                                t.text or ""
+                                for t in cell.iter(f"{{{W_NS}}}t")
+                            )
+                            cells.append(cell_text)
+                        grid.append(cells)
+                    tables.append(grid)
+            if action == "info":
+                headings = sum(1 for p in paragraphs if p["heading"])
+                return ToolResult(
+                    True,
+                    f"{len(paragraphs)} paragraph(s), {len(tables)} table(s)",
+                    data={
+                        "paragraphs": len(paragraphs),
+                        "headings": headings,
+                        "tables": len(tables),
+                    },
+                )
+            if action == "text":
+                limit = args.get("max_paragraphs", 200)
+                if isinstance(limit, bool) or not isinstance(limit, int):
+                    return ToolResult(False, "max_paragraphs must be an integer")
+                limit = max(1, min(1000, limit))
+                return ToolResult(
+                    True,
+                    f"{min(limit, len(paragraphs))} of {len(paragraphs)} paragraph(s)",
+                    data={"paragraphs": paragraphs[:limit], "tables": len(tables)},
+                )
+            if action == "tables":
+                previews = [grid[:10] for grid in tables[:5]]
+                return ToolResult(
+                    True,
+                    f"{len(tables)} table(s)",
+                    data={"tables_total": len(tables), "preview": previews},
+                )
+        finally:
+            zf.close()
+        return ToolResult(False, f"unknown action: {action}")

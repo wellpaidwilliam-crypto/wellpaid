@@ -100,6 +100,9 @@ WellPaiD> remind me to review my CAD portfolio
 WellPaiD> price of AAPL
 WellPaiD> run dxf action=inventory path=plan.dxf
 WellPaiD> run sheets action=stats path=backtest.xlsx
+WellPaiD> run docx action=text path=notes.docx
+WellPaiD> run tasks action=create title="Pay invoice" due_date=2026-09-20
+WellPaiD> run tasks action=due
 WellPaiD> run webfetch url=https://example.com
 ```
 

@@ -39,6 +39,12 @@ Stdlib-only dependency policy upheld: no third-party packages added.
 - ✅ webfetch tool (GET-only, 2 MiB cap, no JS, link-local refused)
 - ✅ 107 automated tests (94 V0.4 preserved + 13 new)
 
+### V0.6 - Personal-Agent Depth, Batch B (Current)
+
+- ✅ CI on current GitHub Actions majors (checkout v5, setup-python v6)
+- ✅ docx tool (.docx via stdlib zip/xml: info/text/tables)
+- ✅ tasks due_date passthrough (YYYY-MM-DD) + `due` action with overdue flags
+
 ### V2 - Enhanced Research
 
 - [ ] Real market data integration

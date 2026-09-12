@@ -115,9 +115,9 @@ def build_default_registry(
             TaskManagerTool,
         )
     try:
-        from agent.tools.documents import DxfTool, FilesTool, PdfTool, SheetsTool
+        from agent.tools.documents import DxfTool, DocxTool, FilesTool, PdfTool, SheetsTool
     except ImportError:
-        from .documents import DxfTool, FilesTool, PdfTool, SheetsTool
+        from .documents import DxfTool, DocxTool, FilesTool, PdfTool, SheetsTool
     try:
         from agent.tools.web import WebFetchTool
     except ImportError:
@@ -136,5 +136,6 @@ def build_default_registry(
     registry.register(SheetsTool(files_root))
     registry.register(PdfTool(files_root))
     registry.register(DxfTool(files_root))
+    registry.register(DocxTool(files_root))
     registry.register(WebFetchTool())
     return registry
