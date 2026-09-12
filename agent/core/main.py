@@ -8,6 +8,7 @@ with conservative natural-language shortcuts.
 import re
 import shlex
 import sys
+from datetime import date
 from typing import Optional
 
 from .config import get_config
@@ -31,7 +32,7 @@ class WellPaiDAgent:
             env_file: Optional path to .env configuration file.
             registry: Optional prebuilt ToolRegistry (tests inject stores).
         """
-        self.version = "0.9.0"
+        self.version = "0.10.0"
         self.running = False
         self.config = get_config(env_file)
 
@@ -71,6 +72,37 @@ class WellPaiDAgent:
             TaskManager(),
         )
 
+    def _due_digest(self) -> Optional[str]:
+        """One-line reminder digest (overdue + due-today task counts).
+
+        Best-effort: any failure (no tasks tool, store error) yields
+        None and startup continues silently.
+        """
+        try:
+            result = self.tools.execute("tasks", {"action": "due"})
+        except Exception:
+            return None
+        if not result.success:
+            return None
+        today = date.today().isoformat()
+        dated = result.data.get("tasks", [])
+        overdue = sum(
+            1 for t in dated if t.get("overdue") and t.get("status") != "completed"
+        )
+        due_today = sum(
+            1
+            for t in dated
+            if t.get("due_date") == today and t.get("status") != "completed"
+        )
+        if not overdue and not due_today:
+            return None
+        parts = []
+        if overdue:
+            parts.append(f"{overdue} overdue")
+        if due_today:
+            parts.append(f"{due_today} due today")
+        return "Reminders: " + ", ".join(parts) + " (run tasks action=due)"
+
     def start(self) -> None:
         """Start the interactive agent loop."""
         self.running = True
@@ -78,6 +110,9 @@ class WellPaiDAgent:
         print(f"  WellPaiD Trader Agent v{self.version}")
         print(f"  Environment: {self.config.ENVIRONMENT}")
         print(f"{'='*50}")
+        digest = self._due_digest()
+        if digest:
+            print(f"  {digest}")
         print("  Type 'help' for available commands.")
         print(f"{'='*50}\n")
 

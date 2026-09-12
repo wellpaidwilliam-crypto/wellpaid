@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.9.0")
+        self.assertEqual(agent.version, "0.10.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -2087,6 +2087,106 @@ class TestAgentCLI(unittest.TestCase):
         finally:
             brokers._http_get_text = original
         self.assertIn("100.5", output)
+
+
+class TestDueDigest(unittest.TestCase):
+    """Test due-date surfacing: CLI digest and API endpoint."""
+
+    def _server(self, with_tasks):
+        import threading
+        from agent.api.server import create_server
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tasks = None
+        if with_tasks:
+            tasks = TaskManager(
+                storage_path=os.path.join(tmp.name, "t.db")
+            )
+            tasks.create("Old bill", due_date="2020-01-01")
+            tasks.create("No date")
+        server = create_server(
+            "127.0.0.1", 0, api_token="due-token", tasks=tasks
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def _stop():
+            try:
+                server.shutdown()
+            finally:
+                server.server_close()
+
+        self.addCleanup(_stop)
+        return server
+
+    def _get(self, server, path):
+        import json as _json
+        import urllib.request
+        import urllib.error
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}{path}"
+        )
+        req.add_header("Authorization", "Bearer due-token")
+        try:
+            with TestAPISurface._urlopen_resilient(req) as resp:
+                return resp.status, _json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, _json.loads(e.read().decode())
+
+    def test_api_due_lists_overdue(self):
+        server = self._server(with_tasks=True)
+        status, body = self._get(server, "/tasks/due")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(len(body["data"]["tasks"]), 1)
+        self.assertTrue(body["data"]["tasks"][0]["overdue"])
+
+    def test_api_due_unavailable_without_backend(self):
+        server = self._server(with_tasks=False)
+        status, body = self._get(server, "/tasks/due")
+        self.assertEqual(status, 404)
+
+    def test_cli_digest_reports_overdue(self):
+        from agent.tools.registry import build_default_registry
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reset_config()
+            self.addCleanup(reset_config)
+            from agent.core.config import Config
+
+            tasks = TaskManager(
+                storage_path=os.path.join(tmpdir, "t.db")
+            )
+            tasks.create("Old bill", due_date="2020-01-01")
+            paper = PaperTradingEngine(
+                storage_path=os.path.join(tmpdir, "p.db")
+            )
+            registry = build_default_registry(Config(), paper, None, None, tasks)
+            agent = WellPaiDAgent(registry=registry)
+            digest = agent._due_digest()
+            self.assertIsNotNone(digest)
+            self.assertIn("1 overdue", digest)
+
+    def test_cli_digest_silent_when_nothing_due(self):
+        from agent.tools.registry import build_default_registry
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reset_config()
+            self.addCleanup(reset_config)
+            from agent.core.config import Config
+
+            tasks = TaskManager(
+                storage_path=os.path.join(tmpdir, "t.db")
+            )
+            tasks.create("No date")
+            paper = PaperTradingEngine(
+                storage_path=os.path.join(tmpdir, "p.db")
+            )
+            registry = build_default_registry(Config(), paper, None, None, tasks)
+            agent = WellPaiDAgent(registry=registry)
+            self.assertIsNone(agent._due_digest())
 
 
 if __name__ == "__main__":

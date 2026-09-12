@@ -60,9 +60,14 @@ Stdlib-only dependency policy upheld: no third-party packages added.
 - ✅ Walk-forward folds (2..5, no tuning — regime-consistency check)
 - ✅ Tool reports stats + folds; honesty labeling unchanged
 
-### V0.9 - Memory Export (Current)
+### V0.9 - Memory Export
 
 - ✅ `memory export` action (markdown|json backup payload, 500 cap)
+
+### V0.10 - Due Digest (Current)
+
+- ✅ CLI startup reminders line (overdue + due-today, silent otherwise)
+- ✅ API `GET /tasks/due` (404 when tasks backend absent)
 
 ### V2 - Enhanced Research
 

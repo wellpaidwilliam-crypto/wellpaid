@@ -142,6 +142,12 @@ class WellPaiDHandler(BaseHTTPRequestHandler):
             self._handle_price(parse_qs(parsed.query))
         elif parsed.path == "/tools":
             self._send(200, {"tools": self.tools.list()})
+        elif parsed.path == "/tasks/due":
+            result = self.tools.execute("tasks", {"action": "due"})
+            if not result.success and "unknown tool" in result.message:
+                self._send(404, {"error": "tasks unavailable"})
+            else:
+                self._send(200 if result.success else 422, result.to_dict())
         else:
             self._send(404, {"error": "not found"})
 

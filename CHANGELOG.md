@@ -6,6 +6,33 @@ All notable changes to WellPaiD Trader, newest first. Format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-12
+
+### Added
+- CLI startup reminders line (overdue + due-today counts, silent otherwise)
+- API `GET /tasks/due` (404 when the tasks backend is absent)
+
+### Tests
+- 130 passing
+
+## [0.9.0] - 2026-09-12
+
+### Added
+- `memory export` action (markdown|json backup payload, 500 cap)
+
+### Tests
+- 126 passing
+
+## [0.8.0] - 2026-09-12
+
+### Added
+- No-lookahead incremental backtest engine with equity curve,
+  max drawdown and Sharpe statistics
+- Walk-forward folds (2..5, no tuning — regime-consistency check)
+
+### Tests
+- 125 passing
+
 ## [0.7.0] - 2026-09-12
 
 ### Added
@@ -82,7 +109,10 @@ All notable changes to WellPaiD Trader, newest first. Format follows
 ### Tests
 - 57 passing
 
-[Unreleased]: https://github.com/wellpaidwilliam-crypto/wellpaid/compare/v0.7.0...master
+[Unreleased]: https://github.com/wellpaidwilliam-crypto/wellpaid/compare/v0.10.0...master
+[0.10.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.10.0
+[0.9.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.9.0
+[0.8.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.8.0
 [0.7.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.7.0
 [0.6.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.6.0
 [0.5.0]: https://github.com/wellpaidwilliam-crypto/wellpaid/releases/tag/v0.5.0
