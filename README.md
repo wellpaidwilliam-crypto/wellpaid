@@ -22,6 +22,8 @@ python -m agent.core.main
 - `hello` - Greet the agent
 - `help` - Show available commands
 - `status` - Show system status
+- `tools` - List agent tools
+- `run` - Run a tool: `run <name> key=value ...`
 - `exit` - Exit the agent
 
 ## Configuration
@@ -46,7 +48,7 @@ WellPaiD-Trader/
 │   ├── risk/             # Risk engine (quantity + notional limits)
 │   ├── tools/            # External tools
 │   └── trading/          # Research, paper trading, read-only brokers
-├── tests/              # Test suite (56 tests)
+├── tests/              # Test suite (110 tests)
 ├── .env.example        # Configuration template
 └── README.md           # This file
 ```

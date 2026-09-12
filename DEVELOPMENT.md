@@ -30,7 +30,7 @@
 
 Stdlib-only dependency policy upheld: no third-party packages added.
 
-### V0.5 - Personal-Agent Depth, Batch A (Current)
+### V0.5 - Personal-Agent Depth, Batch A
 
 - ✅ files tool (root sandbox, traversal + sensitive-name refusal)
 - ✅ sheets tool (.xlsx via stdlib zipfile; stats/preview; no formula eval)
