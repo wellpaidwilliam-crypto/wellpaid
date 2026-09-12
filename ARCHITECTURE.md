@@ -56,7 +56,8 @@ Command Router  ──→  ToolRegistry
   `build_default_registry()` wiring existing backends
 - **catalog.py** - calculator (safe AST), system_status, memory
   (credential refusal), tasks, market_data (read-only), backtest
-  (honesty-labeled), paper_account (risk-gated, PAPER-labeled)
+  (no-lookahead engine: equity/drawdown/Sharpe/walk-forward,
+  honesty-labeled), paper_account (risk-gated, PAPER-labeled)
 - **documents.py** - files (sandboxed root, sensitive-name refusal),
   sheets (.xlsx via stdlib zip, formulas never evaluated), pdf
   (optional pypdf/pdfplumber, graceful install hint), dxf (read-only

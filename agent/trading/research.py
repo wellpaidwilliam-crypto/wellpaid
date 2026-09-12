@@ -340,6 +340,7 @@ class BacktestResult:
         self.sharpe_ratio: float = 0.0
         self.max_drawdown: float = 0.0
         self.win_rate: float = 0.0
+        self.equity_curve: list[float] = []
         self.metadata: dict[str, Any] = {}
 
 
@@ -385,6 +386,11 @@ class Backtester:
     ) -> BacktestResult:
         """Run backtest on historical data.
         
+        The strategy is evaluated incrementally: at each bar, it sees
+        only bars up to that point (no lookahead), and any signal it
+        emits executes at that bar's close (plus costs). This yields a
+        per-bar equity curve for drawdown/Sharpe statistics.
+        
         Args:
             strategy: Strategy to test
             data: Historical market data
@@ -392,64 +398,190 @@ class Backtester:
         Returns:
             BacktestResult with performance metrics
         """
-        signals = strategy.generate_signals(data)
         result = BacktestResult()
+        bars = data.data
+        if not bars:
+            result.metadata = self._metadata(strategy, self.initial_capital, 0.0)
+            return result
         
-        # Simplified backtest logic (close-price fills + costs)
         capital = self.initial_capital
         position = 0.0
         total_fees = 0.0
+        equity = []
         
-        for signal in signals:
-            if signal.side == OrderSide.BUY and capital > 0:
-                # Buy
-                fill = self._fill_price(data.data[-1].close, OrderSide.BUY)
-                fee = capital * self.fee_bps / 10_000.0
-                total_fees += fee
-                shares = (capital - fee) / fill
-                position = shares
-                capital = 0.0
-                result.trades.append({
-                    "type": "buy",
-                    "price": fill,
-                    "shares": shares,
-                    "fee": fee,
-                    "timestamp": signal.timestamp.isoformat(),
-                })
-            elif signal.side == OrderSide.SELL and position > 0:
-                # Sell
-                fill = self._fill_price(data.data[-1].close, OrderSide.SELL)
-                proceeds = position * fill
-                fee = proceeds * self.fee_bps / 10_000.0
-                total_fees += fee
-                capital = proceeds - fee
-                result.trades.append({
-                    "type": "sell",
-                    "price": fill,
-                    "shares": position,
-                    "fee": fee,
-                    "timestamp": signal.timestamp.isoformat(),
-                })
-                position = 0.0
+        for i in range(len(bars)):
+            window = MarketData(
+                symbol=data.symbol,
+                asset_type=data.asset_type,
+                data=bars[: i + 1],
+                metadata={},
+            )
+            try:
+                signals = strategy.generate_signals(window)
+            except Exception:
+                signals = []
+            for signal in signals:
+                if signal.side == OrderSide.BUY and capital > 0:
+                    # Buy at this bar's close
+                    fill = self._fill_price(bars[i].close, OrderSide.BUY)
+                    fee = capital * self.fee_bps / 10_000.0
+                    total_fees += fee
+                    shares = (capital - fee) / fill
+                    position = shares
+                    capital = 0.0
+                    result.trades.append({
+                        "type": "buy",
+                        "price": fill,
+                        "shares": shares,
+                        "fee": fee,
+                        "timestamp": bars[i].timestamp.isoformat(),
+                    })
+                elif signal.side == OrderSide.SELL and position > 0:
+                    # Sell at this bar's close
+                    fill = self._fill_price(bars[i].close, OrderSide.SELL)
+                    proceeds = position * fill
+                    fee = proceeds * self.fee_bps / 10_000.0
+                    total_fees += fee
+                    capital = proceeds - fee
+                    result.trades.append({
+                        "type": "sell",
+                        "price": fill,
+                        "shares": position,
+                        "fee": fee,
+                        "timestamp": bars[i].timestamp.isoformat(),
+                    })
+                    position = 0.0
+            equity.append(capital + position * bars[i].close)
         
-        # Calculate final value
-        final_value = capital + (position * data.data[-1].close if data.data else 0)
+        result.equity_curve = equity
+        final_value = equity[-1] if equity else self.initial_capital
         result.total_return = (final_value - self.initial_capital) / self.initial_capital
+        result.max_drawdown = self._max_drawdown(equity)
+        result.sharpe_ratio = self._sharpe(equity)
         
         # Win rate
         if result.trades:
             wins = len([t for t in result.trades if t.get("type") == "sell"])
             result.win_rate = wins / len(result.trades) if result.trades else 0
         
-        result.metadata = {
+        result.metadata = self._metadata(
+            strategy, final_value, total_fees, bars=len(bars),
+            total_trades=len(result.trades),
+        )
+        
+        return result
+
+    def walk_forward(
+        self,
+        strategy: StrategyBase,
+        data: MarketData,
+        folds: int = 3,
+    ) -> dict[str, Any]:
+        """Run the strategy on chronological folds for regime robustness.
+
+        This is NOT optimization: no parameters are tuned. The same
+        strategy runs on each contiguous fold so inconsistent results
+        across folds warn against overfitting to one regime.
+
+        Args:
+            strategy: Strategy to test (same instance every fold).
+            data: Full historical market data.
+            folds: Number of contiguous folds (2..5).
+
+        Returns:
+            Dict with per-fold returns/trades plus a consistency note.
+        """
+        if not 2 <= folds <= 5:
+            raise ValueError("folds must be 2..5")
+        bars = data.data
+        if len(bars) < folds:
+            raise ValueError("not enough bars for walk-forward folds")
+        chunk = len(bars) // folds
+        fold_results = []
+        for f in range(folds):
+            start = f * chunk
+            end = start + chunk if f < folds - 1 else len(bars)
+            window = MarketData(
+                symbol=data.symbol,
+                asset_type=data.asset_type,
+                data=bars[start:end],
+                metadata={},
+            )
+            res = self.run(strategy, window)
+            fold_results.append(
+                {
+                    "fold": f + 1,
+                    "bars": end - start,
+                    "total_return": res.total_return,
+                    "max_drawdown": res.max_drawdown,
+                    "trades": len(res.trades),
+                }
+            )
+        returns = [f["total_return"] for f in fold_results]
+        consistent = (
+            all(r >= 0 for r in returns) or all(r < 0 for r in returns)
+        )
+        return {
+            "folds": fold_results,
+            "consistent_sign": consistent,
+            "note": (
+                "Same strategy, no tuning: agreement across folds suggests "
+                "regime robustness; disagreement warns of overfitting. "
+                "Still historical, never predictive."
+            ),
+        }
+
+    @staticmethod
+    def _max_drawdown(equity: list[float]) -> float:
+        """Peak-to-trough decline as a fraction of the peak."""
+        peak = float("-inf")
+        worst = 0.0
+        for value in equity:
+            if value > peak:
+                peak = value
+            if peak > 0:
+                worst = min(worst, (value - peak) / peak)
+        return abs(worst)
+
+    @staticmethod
+    def _sharpe(equity: list[float]) -> float:
+        """Mean/std of per-bar simple returns (risk-free = 0).
+
+        Returns 0.0 when undefined (fewer than 2 bars or zero variance)
+        rather than inventing a number.
+        """
+        if len(equity) < 2:
+            return 0.0
+        rets = [
+            (equity[i] - equity[i - 1]) / equity[i - 1]
+            for i in range(1, len(equity))
+            if equity[i - 1] != 0
+        ]
+        if len(rets) < 2:
+            return 0.0
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        if var <= 0:
+            return 0.0
+        return mean / (var ** 0.5)
+
+    def _metadata(
+        self,
+        strategy: StrategyBase,
+        final_value: float,
+        total_fees: float,
+        bars: int = 0,
+        total_trades: int = 0,
+    ) -> dict[str, Any]:
+        """Standard result metadata incl. the honesty disclaimer."""
+        return {
             "strategy": strategy.get_name(),
             "initial_capital": self.initial_capital,
             "final_value": final_value,
-            "total_trades": len(result.trades),
+            "total_trades": total_trades,
             "total_fees": total_fees,
             "fee_bps": self.fee_bps,
             "slippage_bps": self.slippage_bps,
+            "bars": bars,
             "disclaimer": "Past performance does not indicate future results",
         }
-        
-        return result

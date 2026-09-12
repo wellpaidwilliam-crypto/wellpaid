@@ -45,13 +45,20 @@ Stdlib-only dependency policy upheld: no third-party packages added.
 - ✅ docx tool (.docx via stdlib zip/xml: info/text/tables)
 - ✅ tasks due_date passthrough (YYYY-MM-DD) + `due` action with overdue flags
 
-### V0.7 - Realism, Memory, Hardening + Site (Current)
+### V0.7 - Realism, Memory, Hardening + Site
 
 - ✅ Backtester fees/slippage (bps per fill) + seeded deterministic mock data
 - ✅ Webfetch TTL cache (10 min, 50 entries, `fresh` bypass)
 - ✅ Memory search ranked by term frequency, recency tiebreak
 - ✅ API remote-exposure + token rotation docs (TLS via reverse proxy)
 - ✅ GitHub Pages site (`docs/`, static, `.nojekyll`)
+
+### V0.8 - Backtest Depth (Current)
+
+- ✅ No-lookahead incremental engine (strategy sees only past bars)
+- ✅ Per-bar equity curve, max drawdown, Sharpe (0.0 when undefined)
+- ✅ Walk-forward folds (2..5, no tuning — regime-consistency check)
+- ✅ Tool reports stats + folds; honesty labeling unchanged
 
 ### V2 - Enhanced Research
 

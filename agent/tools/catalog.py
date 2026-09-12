@@ -521,6 +521,11 @@ class BacktestTool(Tool):
             "required": False,
             "description": "Adverse move per fill in basis points (default 0).",
         },
+        "folds": {
+            "type": "integer",
+            "required": False,
+            "description": "Walk-forward folds 2..5 (default 0 = off).",
+        },
     }
 
     HONESTY = (
@@ -577,9 +582,19 @@ class BacktestTool(Tool):
                 warnings=[self.HONESTY],
             )
         strategy = SMAcrossoverStrategy()
-        result = Backtester(
-            fee_bps=fee_bps, slippage_bps=slippage_bps
-        ).run(strategy, market)
+        tester = Backtester(fee_bps=fee_bps, slippage_bps=slippage_bps)
+        result = tester.run(strategy, market)
+        folds = args.get("folds", 0)
+        if isinstance(folds, bool) or not isinstance(folds, int):
+            return ToolResult(False, "folds must be an integer")
+        walk = None
+        if folds:
+            if folds < 2 or folds > 5:
+                return ToolResult(False, "folds must be 2..5 (0 = off)")
+            try:
+                walk = tester.walk_forward(strategy, market, folds=folds)
+            except ValueError as exc:
+                return ToolResult(False, f"walk-forward failed: {exc}")
         closes = [b.close for b in market.data]
         sma20 = IndicatorEngine.sma(market.data, 20)
         cost_note = (
@@ -601,11 +616,14 @@ class BacktestTool(Tool):
                 "total_fees": result.metadata.get("total_fees", 0.0),
                 "fee_bps": fee_bps,
                 "slippage_bps": slippage_bps,
+                "max_drawdown": result.max_drawdown,
+                "sharpe_ratio": result.sharpe_ratio,
+                "walk_forward": walk,
                 "last_close": closes[-1],
                 "sma20_last": sma20[-1] if sma20 else None,
                 "source": source,
                 "assumptions": [
-                    "fills at bar close",
+                    "no-lookahead fills at each bar close",
                     cost_note,
                     "single position, full capital per signal",
                 ],

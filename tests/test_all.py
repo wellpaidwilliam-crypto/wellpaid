@@ -60,7 +60,7 @@ class TestCoreAgent(unittest.TestCase):
     def test_agent_creation(self):
         """Test agent can be created."""
         agent = WellPaiDAgent()
-        self.assertEqual(agent.version, "0.7.0")
+        self.assertEqual(agent.version, "0.8.0")
         self.assertFalse(agent.running)
     
     def test_status_shows_disabled(self):
@@ -1863,6 +1863,109 @@ class TestWebCache(unittest.TestCase):
         tool.run({"url": url})
         tool.run({"url": url, "fresh": True})
         self.assertEqual(len(calls), 2)
+
+
+class TestBacktestDepth(unittest.TestCase):
+    """Test equity-curve statistics and walk-forward folds."""
+
+    def _run(self, seed=7):
+        from agent.trading.research import (
+            AssetType,
+            Backtester,
+            MockDataProvider,
+            SMAcrossoverStrategy,
+        )
+
+        market = MockDataProvider(seed=seed).get_historical_data(
+            "AAPL", AssetType.STOCK, datetime(2024, 1, 1), datetime(2024, 6, 30)
+        )
+        return Backtester().run(SMAcrossoverStrategy(5, 10), market), market
+
+    def test_equity_curve_matches_bars(self):
+        result, market = self._run()
+        self.assertEqual(len(result.equity_curve), len(market.data))
+        self.assertAlmostEqual(result.equity_curve[-1],
+                               result.metadata["final_value"])
+        self.assertGreater(len(result.trades), 0)
+
+    def test_drawdown_bounds(self):
+        result, _ = self._run()
+        self.assertGreaterEqual(result.max_drawdown, 0.0)
+        self.assertLessEqual(result.max_drawdown, 1.0)
+
+    def test_sharpe_finite(self):
+        import math
+
+        result, _ = self._run()
+        self.assertTrue(math.isfinite(result.sharpe_ratio))
+
+    def test_empty_data_safe(self):
+        from agent.trading.research import (
+            AssetType,
+            Backtester,
+            MarketData,
+            SMAcrossoverStrategy,
+        )
+
+        empty = MarketData(
+            symbol="X", asset_type=AssetType.STOCK, data=[], metadata={}
+        )
+        result = Backtester().run(SMAcrossoverStrategy(), empty)
+        self.assertEqual(result.equity_curve, [])
+        self.assertEqual(result.total_return, 0.0)
+        self.assertIn("Past performance", result.metadata["disclaimer"])
+
+    def test_walk_forward_structure(self):
+        from agent.trading.research import (
+            AssetType,
+            Backtester,
+            MockDataProvider,
+            SMAcrossoverStrategy,
+        )
+
+        market = MockDataProvider(seed=7).get_historical_data(
+            "AAPL", AssetType.STOCK, datetime(2024, 1, 1), datetime(2024, 6, 30)
+        )
+        walk = Backtester().walk_forward(SMAcrossoverStrategy(5, 10), market, folds=3)
+        self.assertEqual(len(walk["folds"]), 3)
+        self.assertEqual(
+            sum(f["bars"] for f in walk["folds"]), len(market.data)
+        )
+        self.assertIn("consistent_sign", walk)
+        self.assertIn("never predictive", walk["note"])
+
+    def test_walk_forward_rejects_bad_folds(self):
+        from agent.trading.research import (
+            AssetType,
+            Backtester,
+            MockDataProvider,
+            SMAcrossoverStrategy,
+        )
+
+        market = MockDataProvider(seed=7).get_historical_data(
+            "AAPL", AssetType.STOCK, datetime(2024, 1, 1), datetime(2024, 1, 10)
+        )
+        with self.assertRaises(ValueError):
+            Backtester().walk_forward(SMAcrossoverStrategy(), market, folds=1)
+        with self.assertRaises(ValueError):
+            Backtester().walk_forward(SMAcrossoverStrategy(), market, folds=6)
+
+    def test_tool_reports_stats_and_folds(self):
+        from agent.tools.catalog import BacktestTool
+
+        result = BacktestTool().run(
+            {"symbol": "AAPL", "days": 120, "source": "mock",
+             "seed": 7, "folds": 3}
+        )
+        self.assertTrue(result.success)
+        self.assertIn("max_drawdown", result.data)
+        self.assertIn("sharpe_ratio", result.data)
+        self.assertIsNotNone(result.data["walk_forward"])
+        self.assertEqual(len(result.data["walk_forward"]["folds"]), 3)
+        bad = BacktestTool().run(
+            {"symbol": "AAPL", "days": 120, "source": "mock", "folds": 9}
+        )
+        self.assertFalse(bad.success)
 
 
 class TestAgentCLI(unittest.TestCase):
